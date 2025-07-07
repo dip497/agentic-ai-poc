@@ -1,0 +1,382 @@
+# Moveworks-style Configuration
+# This configuration follows the exact patterns from Moveworks documentation
+
+plugins:
+  - name: "pto_management_plugin"
+    description: "Plugin for managing PTO requests and balance inquiries"
+    
+    conversational_processes:
+      - title: "get_pto_balance_process"
+        description: "Fetches the PTO balance for a given user"
+        
+        trigger_utterances:
+          - "How can I check my current paid time off balance?"
+          - "Can I take PTO next week?"
+          - "I want to take PTO the first week of May"
+          - "Check PTO balance"
+          - "What is my remaining paid time off balance"
+          - "How much vacation do I have left?"
+          - "Show my PTO balance"
+        
+        slots:
+          - name: "pto_type"
+            data_type: "string"
+            slot_description: "Type of PTO balance to fetch (vacation, sick leave, or personal time)"
+            slot_validation_policy: "value IN ['vacation', 'sick', 'personal']"
+            slot_validation_description: "Please choose from vacation, sick leave, or personal time"
+            slot_inference_policy: "Infer slot value if available"
+            resolver_strategy:
+              method_name: "choose_from_existing_pto_balance_types"
+              method_type: "Static"
+              static_options:
+                - display_value: "Vacation"
+                  raw_value: "vacation"
+                - display_value: "Sick Leave"
+                  raw_value: "sick"
+                - display_value: "Personal Time"
+                  raw_value: "personal"
+        
+        activities:
+          - activity_type: "action"
+            action_name: "get_pto_balance_action"
+            required_slots: ["pto_type"]
+            input_mapping:
+              pto_type: "data.pto_type.value"
+              user_email: "meta_info.user.email_addr"
+            output_mapping:
+              dot_walk_path: ".pto_details"
+              output_key: "pto_balance_result"
+            confirmation_policy: "No confirmation required"
+          
+          - activity_type: "content"
+            content_text: "Your {{data.pto_type}} balance is {{data.pto_balance_result.available_days}} days available out of {{data.pto_balance_result.total_days}} total days."
+
+  - name: "feature_request_plugin"
+    description: "Plugin for managing feature request updates"
+    
+    conversational_processes:
+      - title: "update_feature_request_process"
+        description: "This will help users update the status of an existing feature request"
+        
+        trigger_utterances:
+          - "How do I update a feature request?"
+          - "Can you update a feature request?"
+          - "Change status of FR-12345 to Limited Preview"
+          - "update feature request"
+          - "Change feature request status"
+          - "Update FR-123 to completed"
+        
+        slots:
+          - name: "feature_request"
+            data_type: "object"
+            slot_description: "The feature request to update"
+            slot_inference_policy: "Infer slot value if available"
+            resolver_strategy:
+              method_name: "search_feature_requests"
+              method_type: "Vector Search"
+              vector_store_name: "feature_requests"
+              similarity_threshold: 0.7
+              max_results: 5
+          
+          - name: "target_status"
+            data_type: "string"
+            slot_description: "New status for the feature request"
+            slot_inference_policy: "Always explicitly ask for slot"
+            resolver_strategy:
+              method_name: "choose_status"
+              method_type: "Static"
+              static_options:
+                - display_value: "In Progress"
+                  raw_value: "in_progress"
+                - display_value: "Completed"
+                  raw_value: "completed"
+                - display_value: "On Hold"
+                  raw_value: "on_hold"
+                - display_value: "Cancelled"
+                  raw_value: "cancelled"
+        
+        activities:
+          - activity_type: "action"
+            action_name: "update_feature_request_action"
+            required_slots: ["feature_request", "target_status"]
+            input_mapping:
+              feature_request_id: "data.feature_request.id"
+              new_status: "data.target_status.value"
+              updated_by: "meta_info.user.email_addr"
+            output_mapping:
+              output_key: "update_result"
+            confirmation_policy: "Require consent from the user"
+          
+          - activity_type: "content"
+            content_text: "I've successfully updated feature request {{data.feature_request.id}} to {{data.target_status}} status."
+
+  - name: "procurement_plugin"
+    description: "Plugin for procurement purchase requests with AI classification"
+    
+    conversational_processes:
+      - title: "support_procurement_purchases_process"
+        description: "This will help users submit a Procurement purchase request (PR)"
+        
+        trigger_utterances:
+          - "submit purchase request"
+          - "how can i submit a PR to procurement?"
+          - "I need to order 100 pens for the office"
+          - "I need to submit a PR for a laptop"
+          - "Can I submit a purchase order?"
+        
+        slots:
+          - name: "item_name"
+            data_type: "string"
+            slot_description: "The name of the item that the user wants to purchase."
+            slot_inference_policy: "Infer slot value if available"
+          
+          - name: "quantity"
+            data_type: "number"
+            slot_description: "The number of units of the item that the user wants to purchase."
+            slot_validation_policy: "value > 0"
+            slot_validation_description: "The quantity for the item in the purchase request must be greater than zero"
+            slot_inference_policy: "Infer slot value if available"
+          
+          - name: "business_justification"
+            data_type: "string"
+            slot_description: "A justification from the user on why this purchase is necessary."
+            slot_inference_policy: "Infer slot value if available"
+          
+          - name: "is_purchase_for_organization_acknowledgement"
+            data_type: "boolean"
+            slot_description: "An explicit acknowledgement from the user that this purchase is for the organization and not for personal use."
+            slot_validation_policy: "value == TRUE"
+            slot_validation_description: "The user must explicitly acknowledge \"yes\" to indicate that this purchase is intended for the organization and not for personal use."
+            slot_inference_policy: "Always explicitly ask for slot"
+        
+        activities:
+          # First, get historical purchases for context
+          - activity_type: "action"
+            action_name: "get_historical_purchases"
+            required_slots: []
+            output_mapping:
+              output_key: "historical_purchases"
+          
+          # Use AI to classify the purchase request
+          - activity_type: "action"
+            action_name: "generate_text_action"
+            required_slots: ["item_name"]
+            input_mapping:
+              system_prompt: "Take the item and compare it against the historical purchases to determine its Opex or Capex classification. Only output Opex or Capex"
+              user_input: "data.item_name"
+            output_mapping:
+              dot_walk_path: ".openai_chat_completions_response.choices[0].message.content"
+              output_key: "pr_classification"
+            confirmation_policy: "Require consent from the user"
+          
+          # Decision activity based on classification
+          - activity_type: "decision"
+            decision_cases:
+              - condition: "data.pr_classification.$LOWERCASE() == 'opex'"
+                next_activity: 4  # Submit Opex request
+              - condition: "data.pr_classification.$LOWERCASE() == 'capex'"
+                next_activity: 5  # Show CapEx portal
+              - condition: "true"  # Default case
+                next_activity: 6  # Uncategorized message
+          
+          # Submit Opex purchase request
+          - activity_type: "action"
+            action_name: "submit_purchase_request"
+            required_slots: ["item_name", "quantity", "business_justification", "is_purchase_for_organization_acknowledgement"]
+            input_mapping:
+              item_name: "data.item_name"
+              quantity: "data.quantity"
+              justification: "data.business_justification"
+              for_organization: "data.is_purchase_for_organization_acknowledgement"
+            output_mapping:
+              output_key: "submitted_pr_result"
+          
+          # CapEx portal redirect
+          - activity_type: "content"
+            content_html: 'This request falls under CapEx. Please visit <a href="https://www.company.com/capex">CapEx Submission Portal</a> to submit your request.'
+          
+          # Uncategorized request message
+          - activity_type: "content"
+            content_text: "Unfortunately, this purchase request could not get categorized, so it was not submitted. Please feel free to try submitting another request."
+
+# Built-in Actions Configuration
+builtin_actions:
+  generate_text_action:
+    model: "gpt-4o-mini"
+    max_tokens: 1000
+    temperature: 0.1
+  
+  generate_structured_value_action:
+    model: "gpt-4o-mini"
+    max_tokens: 1000
+    temperature: 0.1
+  
+  get_user_by_email:
+    user_store: "internal"  # or "external_api"
+  
+  send_chat_notification:
+    platform: "slack"  # or "teams", "email"
+
+# Custom Actions Configuration
+custom_actions:
+  get_pto_balance_action:
+    type: "http"
+    endpoint: "https://hr.company.com/api/pto/balance"
+    method: "GET"
+    auth_type: "bearer"
+    auth_token_env: "HR_API_TOKEN"
+  
+  update_feature_request_action:
+    type: "http"
+    endpoint: "https://jira.company.com/api/feature-requests/{feature_request_id}"
+    method: "PATCH"
+    auth_type: "basic"
+    auth_config:
+      username_env: "JIRA_USERNAME"
+      password_env: "JIRA_API_TOKEN"
+  
+  submit_purchase_request:
+    type: "http"
+    endpoint: "https://procurement.company.com/api/requests"
+    method: "POST"
+    auth_type: "api_key"
+    auth_config:
+      api_key_env: "PROCUREMENT_API_KEY"
+      api_key_header: "X-API-Key"
+  
+  get_historical_purchases:
+    type: "http"
+    endpoint: "https://procurement.company.com/api/historical-purchases"
+    method: "GET"
+    auth_type: "api_key"
+    auth_config:
+      api_key_env: "PROCUREMENT_API_KEY"
+      api_key_header: "X-API-Key"
+
+# Vector Stores Configuration
+vector_stores:
+  feature_requests:
+    type: "faiss"
+    embedding_model: "text-embedding-ada-002"
+    index_path: "data/feature_requests.index"
+    metadata_path: "data/feature_requests_metadata.json"
+  
+  meeting_rooms:
+    type: "chromadb"
+    collection_name: "meeting_rooms"
+    embedding_model: "text-embedding-ada-002"
+
+# LLM Configuration - Google Gemini
+llm:
+  # Default LLM configuration
+  default:
+    provider: "gemini"
+    model: "gemini-1.5-flash"
+    temperature: 0.1
+    max_tokens: 2000
+
+  # Process matching LLM
+  process_matching:
+    provider: "gemini"
+    model: "gemini-1.5-flash"
+    temperature: 0.1
+    max_tokens: 1000
+    min_confidence: 0.6
+
+  # Slot inference LLM
+  slot_inference:
+    provider: "gemini"
+    model: "gemini-1.5-flash"
+    temperature: 0.1
+    max_tokens: 1000
+
+  # Built-in actions LLM
+  builtin_actions:
+    provider: "gemini"
+    model: "gemini-1.5-flash"
+    temperature: 0.1
+    max_tokens: 2000
+
+# Alternative LLM Configurations (uncomment to use)
+# llm:
+#   # Google Gemini Configuration
+#   default:
+#     provider: "gemini"
+#     model: "gemini-1.5-flash"
+#     temperature: 0.1
+#     max_tokens: 2000
+#
+#   process_matching:
+#     provider: "gemini"
+#     model: "gemini-1.5-flash"
+#     temperature: 0.1
+#     max_tokens: 1000
+#
+#   slot_inference:
+#     provider: "gemini"
+#     model: "gemini-1.5-flash"
+#     temperature: 0.1
+#     max_tokens: 1000
+
+# llm:
+#   # OpenRouter Configuration (Claude via OpenRouter)
+#   default:
+#     provider: "openrouter"
+#     model: "anthropic/claude-3.5-sonnet"
+#     temperature: 0.1
+#     max_tokens: 2000
+#     provider_config:
+#       app_name: "Moveworks AI System"
+#
+#   process_matching:
+#     provider: "openrouter"
+#     model: "anthropic/claude-3.5-sonnet"
+#     temperature: 0.1
+#     max_tokens: 1000
+
+# llm:
+#   # Local Ollama Configuration
+#   default:
+#     provider: "ollama"
+#     model: "llama3.1"
+#     temperature: 0.1
+#     max_tokens: 2000
+#     provider_config:
+#       base_url: "http://localhost:11434"
+
+# Access Control Policies
+access_policies:
+  pto_access:
+    expression: "user.department IN ['Engineering', 'HR', 'Management'] OR user.role == 'Employee'"
+    description: "Access control for PTO operations"
+    resource: "process:get_pto_balance_process"
+  
+  feature_request_access:
+    expression: "user.role IN ['Developer', 'Manager', 'Product Manager']"
+    description: "Access control for feature request operations"
+    resource: "process:update_feature_request_process"
+  
+  procurement_access:
+    expression: "user.status == 'active'"
+    description: "Access control for procurement operations"
+    resource: "process:support_procurement_purchases_process"
+
+# Business Rules
+business_rules:
+  pto_rules:
+    - name: "check_pto_eligibility"
+      expression: "user.employment_status == 'active' AND user.tenure_months >= 3"
+      description: "User must be active employee with at least 3 months tenure"
+      error_message: "PTO balance is only available for active employees with at least 3 months of service."
+  
+  feature_request_rules:
+    - name: "check_feature_request_ownership"
+      expression: "user.email_addr == feature_request.created_by OR user.role IN ['Manager', 'Admin']"
+      description: "Users can only update their own feature requests unless they're managers"
+      error_message: "You can only update feature requests you created, unless you're a manager."
+  
+  procurement_rules:
+    - name: "check_purchase_amount"
+      expression: "data.quantity * data.estimated_cost <= user.approval_limit"
+      description: "Purchase amount must be within user's approval limit"
+      error_message: "This purchase exceeds your approval limit. Please get manager approval."

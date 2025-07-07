@@ -1,0 +1,42 @@
+[project]
+name = "motadata-ai-2"
+version = "0.1.0"
+description = "Moveworks-style AI system with AG-UI test interface"
+requires-python = ">=3.12"
+dependencies = [
+    # Core dependencies
+    "httpx>=0.28.1",
+    "langchain>=0.3.26",
+    "langchain-community>=0.3.27",
+    "langchain-core>=0.3.68",
+    "langchain-google-genai>=2.1.6",
+    "pydantic>=2.11.7",
+    "pyyaml>=6.0.2",
+    # AG-UI Protocol dependencies
+    "ag-ui-protocol>=0.1.0",
+    # LangGraph for reasoning agent
+    "langgraph>=0.2.74",
+    # FastAPI and server dependencies
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "python-multipart>=0.0.12",
+    # PostgreSQL and vector search
+    "asyncpg>=0.30.0",
+    "psycopg2-binary>=2.9.9",
+    "pgvector>=0.3.6",
+    "sqlalchemy[asyncio]>=2.0.36",
+    # Embeddings and similarity search
+    "sentence-transformers>=3.3.1",
+    "numpy>=2.2.1",
+    "scikit-learn>=1.6.0",
+    # Additional utilities
+    "python-dateutil>=2.8.0",
+    "aiofiles>=24.1.0",
+    "python-jose[cryptography]>=3.3.0",
+    "passlib[bcrypt]>=1.7.4",
+    # Development and testing
+    "pytest>=8.3.4",
+    "pytest-asyncio>=0.25.0",
+    "playwright>=1.49.1",
+    "langchain-openai>=0.3.27",
+]
