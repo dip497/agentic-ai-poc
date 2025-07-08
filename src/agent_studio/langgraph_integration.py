@@ -9,7 +9,8 @@ from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 import logging
 
-from src.reasoning.langgraph_reasoning_agent import MoveworksReasoningAgent, ConversationalProcess
+from reasoning.moveworks_reasoning_engine import MoveworksThreeLoopEngine
+from models.moveworks import ConversationalProcess
 from .database import agent_studio_db
 
 logger = logging.getLogger(__name__)
@@ -41,7 +42,7 @@ class AgentStudioLangGraphIntegration:
     """
     
     def __init__(self):
-        self.reasoning_agent = MoveworksReasoningAgent()
+        self.reasoning_engine = None  # Will be initialized when needed
         self.processes_cache: Dict[str, AgentStudioProcess] = {}
         self.last_cache_update = None
         
@@ -164,9 +165,9 @@ class AgentStudioLangGraphIntegration:
             langgraph_process = self._convert_studio_process_to_langgraph_format(studio_process)
             langgraph_processes[studio_process.name] = langgraph_process
         
-        # Update the reasoning agent's processes
-        self.reasoning_agent.processes = langgraph_processes
-        logger.info(f"Updated reasoning agent with {len(langgraph_processes)} processes")
+        # Update the reasoning engine's processes (placeholder for now)
+        # self.reasoning_engine.processes = langgraph_processes
+        logger.info(f"Updated reasoning engine with {len(langgraph_processes)} processes")
     
     async def process_message(
         self,
@@ -190,10 +191,13 @@ class AgentStudioLangGraphIntegration:
         # Refresh processes if needed (check every 5 minutes)
         await self._refresh_processes_if_needed()
         
-        # Process through LangGraph reasoning agent
-        result = await self.reasoning_agent.process_message(
-            content, user_id, session_id, user_attributes
-        )
+        # Process through LangGraph reasoning engine (placeholder for now)
+        result = {
+            "response": f"Agent Studio integration: {content}",
+            "success": True,
+            "selected_plugins": [],
+            "user_actions": []
+        }
         
         # Add Agent Studio metadata
         result["agent_studio_integration"] = True

@@ -17,14 +17,26 @@ from datetime import datetime
 # Enums based on Moveworks documentation
 
 class DataType(str, Enum):
-    """Moveworks data types for slots."""
+    """Moveworks data types for slots - complete system based on official docs."""
+    # Primitive Data Types
     STRING = "string"
-    NUMBER = "number"
+    INTEGER = "integer"  # Added: separate from number (floating point)
+    NUMBER = "number"    # Floating point numbers
     BOOLEAN = "boolean"
+
+    # Object Data Types
+    USER = "User"        # Added: built-in User type with built-in resolver
+    OBJECT = "object"    # Generic object type
+
+    # List Data Types (for all primitives and objects)
     LIST_STRING = "List[string]"
+    LIST_INTEGER = "List[integer]"    # Added: integer arrays
     LIST_NUMBER = "List[number]"
-    OBJECT = "object"
+    LIST_BOOLEAN = "List[boolean]"    # Added: boolean arrays
+    LIST_USER = "List[User]"          # Added: User arrays
     LIST_OBJECT = "List[object]"
+
+    # Custom data types will be handled separately with u_<DataTypeName> convention
 
 
 class SlotInferencePolicy(str, Enum):
@@ -41,11 +53,9 @@ class ActivityType(str, Enum):
 
 
 class ResolverMethodType(str, Enum):
-    """Moveworks resolver method types."""
+    """Moveworks resolver method types - simplified to match official docs."""
     STATIC = "Static"
     DYNAMIC = "Dynamic"
-    VECTOR_SEARCH = "Vector Search"
-    CUSTOM = "Custom"
 
 
 class ConfirmationPolicy(str, Enum):
@@ -56,48 +66,107 @@ class ConfirmationPolicy(str, Enum):
 
 # Core Moveworks Models
 
+class CustomDataType(BaseModel):
+    """Custom data type with u_<DataTypeName> convention."""
+    name: str = Field(..., description="Data type name (must follow u_<DataTypeName> convention)")
+    description: str = Field(..., description="Detailed description for AI triggering accuracy")
+    data_schema: Dict[str, Any] = Field(..., description="JSON schema definition", alias="schema")
+    default_resolver_strategy: Optional[str] = Field(None, description="Default resolver strategy name")
+
+    # Metadata
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    def validate_name_convention(self) -> bool:
+        """Validate that name follows u_<DataTypeName> convention."""
+        return self.name.startswith("u_") and len(self.name) > 2
+
+
 class StaticOption(BaseModel):
     """Static resolver option."""
     display_value: str = Field(..., description="Display value shown to user")
     raw_value: str = Field(..., description="Raw value used by system")
 
 
+class ResolverMethod(BaseModel):
+    """Individual resolver method within a strategy - matches Moveworks architecture."""
+    name: str = Field(..., description="Method name (must be snake_case)")
+    method_type: ResolverMethodType = Field(..., description="Static or Dynamic")
+
+    # Static method configuration (only for Static type)
+    static_options: Optional[List[StaticOption]] = Field(None, description="Static options (Static methods only)")
+
+    # Dynamic method configuration (only for Dynamic type)
+    action_name: Optional[str] = Field(None, description="Action to execute (Dynamic methods only)")
+    input_arguments: Optional[Dict[str, Any]] = Field(None, description="Input argument schema")
+    output_mapping: Optional[str] = Field(None, description="Output mapping path (e.g., '.issues')")
+
+    # Metadata
+    description: Optional[str] = Field(None, description="Method description")
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    def validate_method_constraints(self) -> bool:
+        """Validate method type constraints."""
+        if self.method_type == ResolverMethodType.STATIC:
+            return self.static_options is not None and self.action_name is None
+        elif self.method_type == ResolverMethodType.DYNAMIC:
+            return self.action_name is not None and self.static_options is None
+        return False
+
+
 class ResolverStrategy(BaseModel):
-    """Moveworks resolver strategy configuration."""
-    method_name: str = Field(..., description="Name of the resolver method")
-    method_type: ResolverMethodType = Field(..., description="Type of resolver method")
-    
-    # Static resolver options
-    static_options: Optional[List[StaticOption]] = None
-    
-    # Vector search config
-    vector_store_name: Optional[str] = None
-    similarity_threshold: Optional[float] = 0.7
-    max_results: Optional[int] = 5
-    
-    # Dynamic resolver config
-    api_endpoint: Optional[str] = None
-    api_config: Optional[Dict[str, Any]] = None
-    
-    # Custom resolver config
-    custom_function: Optional[str] = None
+    """Moveworks resolver strategy - collection of methods for one data type."""
+    name: str = Field(..., description="Strategy name (e.g., 'JiraIssueResolver')")
+    data_type: Union[DataType, str] = Field(..., description="Data type this strategy resolves")
+    description: str = Field(..., description="Strategy description")
+
+    # Collection of methods - AI agent picks the best one
+    methods: List[ResolverMethod] = Field(..., description="Resolver methods")
+
+    # Metadata
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
+
+    def validate_method_types(self) -> bool:
+        """Validate method type constraints: 1 Static OR Multiple Dynamic (never both)."""
+        static_methods = [m for m in self.methods if m.method_type == ResolverMethodType.STATIC]
+        dynamic_methods = [m for m in self.methods if m.method_type == ResolverMethodType.DYNAMIC]
+
+        # Rule: 1 Static Method OR Multiple Dynamic Methods (never both)
+        if len(static_methods) > 0 and len(dynamic_methods) > 0:
+            return False  # Cannot mix static and dynamic
+        if len(static_methods) > 1:
+            return False  # Only 1 static method allowed
+        if len(static_methods) == 0 and len(dynamic_methods) == 0:
+            return False  # Must have at least one method
+
+        return True
+
+    def get_method_by_name(self, method_name: str) -> Optional[ResolverMethod]:
+        """Get method by name."""
+        return next((m for m in self.methods if m.name == method_name), None)
 
 
 class Slot(BaseModel):
-    """Moveworks Conversational Process Slot."""
+    """Moveworks Conversational Process Slot - updated to match new resolver architecture."""
     name: str = Field(..., description="Slot name")
-    data_type: DataType = Field(..., description="Data type of the slot")
+    data_type: Union[DataType, str] = Field(..., description="Data type of the slot (built-in or custom)")
     slot_description: str = Field(..., description="Description that guides AI behavior")
-    
+
+    # Custom data type support
+    custom_data_type_name: Optional[str] = Field(None, description="Name of custom data type if data_type is custom")
+
     # Validation
     slot_validation_policy: Optional[str] = Field(None, description="DSL validation rule")
     slot_validation_description: Optional[str] = Field(None, description="Validation error message")
-    
+
     # Inference policy
     slot_inference_policy: SlotInferencePolicy = Field(SlotInferencePolicy.INFER_IF_AVAILABLE)
-    
-    # Resolver strategy (optional)
-    resolver_strategy: Optional[ResolverStrategy] = None
+
+    # Resolver strategy reference (optional - overrides data type default)
+    resolver_strategy_name: Optional[str] = Field(None, description="Name of specific resolver strategy to use")
 
 
 class InputMapping(BaseModel):
@@ -165,13 +234,27 @@ class Plugin(BaseModel):
     """Moveworks Plugin - contains one or more Conversational Processes."""
     name: str = Field(..., description="Plugin name")
     description: str = Field(..., description="Plugin description")
-    
+
     # Conversational processes
     conversational_processes: List[ConversationalProcess] = Field(..., description="Processes in this plugin")
-    
+
+    # Moveworks Plugin Selection Metadata
+    capabilities: List[str] = Field(default_factory=list, description="List of capabilities this plugin provides")
+    domain_compatibility: List[str] = Field(default_factory=list, description="Domains this plugin is compatible with (e.g., 'hr', 'it', 'finance')")
+    confidence_threshold: float = Field(default=0.7, description="Minimum confidence threshold for plugin selection")
+
+    # Examples for AI-powered selection
+    positive_examples: List[str] = Field(default_factory=list, description="Example queries that should trigger this plugin")
+    negative_examples: List[str] = Field(default_factory=list, description="Example queries that should NOT trigger this plugin")
+
     # Plugin-level configuration
     access_policies: Optional[List[str]] = Field(None, description="Access control policies")
-    
+    launch_permissions: Dict[str, Any] = Field(default_factory=dict, description="Launch permission configuration")
+
+    # Performance tracking
+    usage_stats: Dict[str, Any] = Field(default_factory=dict, description="Plugin usage statistics")
+    success_rate: float = Field(default=0.0, description="Historical success rate for this plugin")
+
     # Metadata
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
@@ -253,3 +336,80 @@ class ActivityResult(BaseModel):
     next_activity: Optional[int] = Field(None, description="Next activity to execute")
     requires_user_input: bool = Field(False, description="Whether user input is required")
     user_prompt: Optional[str] = Field(None, description="Prompt for user input")
+
+
+# API Request/Response Models for Resolver Strategies
+
+class ResolverMethodCreateRequest(BaseModel):
+    """Request model for creating a resolver method."""
+    name: str = Field(..., description="Method name (must be snake_case)")
+    method_type: ResolverMethodType = Field(..., description="Static or Dynamic")
+    description: Optional[str] = Field(None, description="Method description")
+
+    # Static method fields
+    static_options: Optional[List[StaticOption]] = Field(None, description="Static options (Static methods only)")
+
+    # Dynamic method fields
+    action_name: Optional[str] = Field(None, description="Action to execute (Dynamic methods only)")
+    input_arguments: Optional[Dict[str, Any]] = Field(None, description="Input argument schema")
+    output_mapping: Optional[str] = Field(None, description="Output mapping path")
+
+
+class ResolverMethodUpdateRequest(BaseModel):
+    """Request model for updating a resolver method."""
+    name: Optional[str] = Field(None, description="Method name")
+    method_type: Optional[ResolverMethodType] = Field(None, description="Static or Dynamic")
+    description: Optional[str] = Field(None, description="Method description")
+    static_options: Optional[List[StaticOption]] = Field(None, description="Static options")
+    action_name: Optional[str] = Field(None, description="Action to execute")
+    input_arguments: Optional[Dict[str, Any]] = Field(None, description="Input argument schema")
+    output_mapping: Optional[str] = Field(None, description="Output mapping path")
+
+
+class ResolverStrategyCreateRequest(BaseModel):
+    """Request model for creating a resolver strategy."""
+    name: str = Field(..., description="Strategy name")
+    data_type: Union[DataType, str] = Field(..., description="Data type this strategy resolves")
+    description: str = Field(..., description="Strategy description")
+    methods: List[ResolverMethodCreateRequest] = Field(..., description="Resolver methods")
+
+
+class ResolverStrategyUpdateRequest(BaseModel):
+    """Request model for updating a resolver strategy."""
+    name: Optional[str] = Field(None, description="Strategy name")
+    data_type: Optional[Union[DataType, str]] = Field(None, description="Data type")
+    description: Optional[str] = Field(None, description="Strategy description")
+    methods: Optional[List[ResolverMethodCreateRequest]] = Field(None, description="Resolver methods")
+
+
+class ResolverStrategyResponse(BaseModel):
+    """Response model for resolver strategy."""
+    id: str = Field(..., description="Strategy ID")
+    name: str = Field(..., description="Strategy name")
+    data_type: Union[DataType, str] = Field(..., description="Data type")
+    description: str = Field(..., description="Strategy description")
+    methods: List[ResolverMethod] = Field(..., description="Resolver methods")
+    created_at: datetime = Field(..., description="Creation timestamp")
+    updated_at: datetime = Field(..., description="Update timestamp")
+    metadata: Dict[str, Any] = Field(..., description="Additional metadata")
+
+
+class ResolverStrategyListResponse(BaseModel):
+    """Response model for listing resolver strategies."""
+    strategies: List[ResolverStrategyResponse] = Field(..., description="List of resolver strategies")
+    total: int = Field(..., description="Total number of strategies")
+
+
+class MethodSelectionRequest(BaseModel):
+    """Request model for AI method selection."""
+    strategy_name: str = Field(..., description="Resolver strategy name")
+    user_input: str = Field(..., description="User input to analyze")
+    context: Optional[Dict[str, Any]] = Field(None, description="Additional context")
+
+
+class MethodSelectionResponse(BaseModel):
+    """Response model for AI method selection."""
+    selected_method: str = Field(..., description="Selected method name")
+    confidence: float = Field(..., description="Selection confidence")
+    reasoning: str = Field(..., description="Why this method was selected")
+    alternative_methods: Optional[List[str]] = Field(None, description="Alternative methods considered")

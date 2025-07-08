@@ -10,10 +10,10 @@ from typing import Dict, List, Any, Optional
 from pathlib import Path
 import logging
 
-from ..models.moveworks import (
+from models.moveworks import (
     Plugin, ConversationalProcess, Slot, Activity,
     DataType, SlotInferencePolicy, ActivityType,
-    ResolverStrategy, ResolverMethodType, StaticOption,
+    ResolverStrategy, ResolverMethod, ResolverMethodType, StaticOption,
     ConfirmationPolicy, InputMapping, OutputMapping
 )
 
@@ -121,29 +121,43 @@ class MoveworksConfigLoader:
     
     def _create_resolver_strategy_from_config(self, resolver_config: Dict[str, Any]) -> ResolverStrategy:
         """Create a ResolverStrategy from configuration."""
-        method_type = ResolverMethodType(resolver_config["method_type"])
-        
+        methods = []
+        for method_config in resolver_config["methods"]:
+            method = self._create_resolver_method_from_config(method_config)
+            methods.append(method)
+
+        return ResolverStrategy(
+            name=resolver_config["name"],
+            data_type=resolver_config["data_type"],
+            description=resolver_config["description"],
+            methods=methods
+        )
+
+    def _create_resolver_method_from_config(self, method_config: Dict[str, Any]) -> ResolverMethod:
+        """Create a ResolverMethod from configuration."""
+        method_type = ResolverMethodType(method_config["method_type"])
+
         # Parse static options if present
         static_options = None
-        if "static_options" in resolver_config:
+        if "static_options" in method_config:
             static_options = [
                 StaticOption(
                     display_value=option["display_value"],
                     raw_value=option["raw_value"]
                 )
-                for option in resolver_config["static_options"]
+                for option in method_config["static_options"]
             ]
-        
-        return ResolverStrategy(
-            method_name=resolver_config["method_name"],
+
+        return ResolverMethod(
+            name=method_config["method_name"],
             method_type=method_type,
             static_options=static_options,
-            vector_store_name=resolver_config.get("vector_store_name"),
-            similarity_threshold=resolver_config.get("similarity_threshold"),
-            max_results=resolver_config.get("max_results"),
-            api_endpoint=resolver_config.get("api_endpoint"),
-            api_config=resolver_config.get("api_config"),
-            custom_function=resolver_config.get("custom_function")
+            vector_store_name=method_config.get("vector_store_name"),
+            similarity_threshold=method_config.get("similarity_threshold"),
+            max_results=method_config.get("max_results"),
+            api_endpoint=method_config.get("api_endpoint"),
+            api_config=method_config.get("api_config"),
+            custom_function=method_config.get("custom_function")
         )
     
     def _create_activity_from_config(self, activity_config: Dict[str, Any]) -> Activity:

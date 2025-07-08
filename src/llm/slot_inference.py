@@ -16,6 +16,7 @@ from ..models.moveworks import (
     Slot, SlotInferencePolicy, SlotInferenceResult,
     ConversationContext, ResolverStrategy, StaticOption
 )
+# Import moved to avoid circular dependency
 from .llm_factory import LLMFactory
 
 
@@ -45,17 +46,24 @@ class MoveworksSlotInference:
     
     def __init__(self, llm_config: Optional[Dict[str, Any]] = None):
         """Initialize the slot inference system."""
-        if llm_config is None:
-            llm_config = {
-                "provider": "openai",
-                "model": "gpt-4o-mini",
-                "temperature": 0.1,
-                "max_tokens": 1000
-            }
+        # Use LLM factory to create Gemini instance
+        import os
+        from .llm_factory import LLMFactory
 
-        self.llm = LLMFactory.create_llm(**llm_config)
-        
+        # Set the API key
+        os.environ["GOOGLE_API_KEY"] = "AIzaSyC9vwixXT9XdbFzCfFapNR21wYA5ma7LDg"
+
+        self.llm = LLMFactory.create_llm(
+            provider="gemini",
+            model="gemini-1.5-flash",
+            temperature=0.1,
+            max_tokens=1000
+        )
+
         self.output_parser = PydanticOutputParser(pydantic_object=SlotInferenceOutput)
+
+        # Initialize dynamic resolver execution engine (lazy import to avoid circular dependency)
+        self.resolver_engine = None
         
         # Slot inference prompt template
         self.inference_prompt = ChatPromptTemplate.from_messages([
@@ -114,8 +122,39 @@ Based on the conversation context and slot requirements, determine if you can in
             # Check if we should always ask (skip inference)
             if slot.slot_inference_policy == SlotInferencePolicy.ALWAYS_ASK:
                 return await self._generate_clarification_question(slot, context)
-            
-            # Prepare context for LLM
+
+            # Handle custom data types with dynamic resolver execution
+            if slot.custom_data_type_name:
+                logger.info(f"Executing dynamic resolver for custom data type: {slot.custom_data_type_name}")
+
+                # Lazy import to avoid circular dependency
+                if self.resolver_engine is None:
+                    from .resolver_execution_engine import DynamicResolverExecutionEngine
+                    self.resolver_engine = DynamicResolverExecutionEngine(llm=self.llm)
+
+                resolver_result = await self.resolver_engine.execute_resolver_for_slot(
+                    slot, user_utterance, context, conversation_history
+                )
+
+                if resolver_result.success:
+                    return SlotInferenceResult(
+                        slot_name=slot.name,
+                        inferred_value=resolver_result.resolved_value,
+                        confidence=0.9,  # High confidence for successful resolver execution
+                        needs_clarification=False,
+                        clarification_options=None
+                    )
+                else:
+                    # Resolver failed, ask for clarification
+                    return SlotInferenceResult(
+                        slot_name=slot.name,
+                        inferred_value=None,
+                        confidence=0.0,
+                        needs_clarification=True,
+                        clarification_options=[f"Resolver execution failed: {resolver_result.error_message}"]
+                    )
+
+            # Prepare context for LLM (for non-custom data types)
             history_text = "\n".join(conversation_history or [])
             static_options_text = self._format_static_options(slot.resolver_strategy)
             

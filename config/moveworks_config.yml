@@ -26,15 +26,19 @@ plugins:
             slot_validation_description: "Please choose from vacation, sick leave, or personal time"
             slot_inference_policy: "Infer slot value if available"
             resolver_strategy:
-              method_name: "choose_from_existing_pto_balance_types"
-              method_type: "Static"
-              static_options:
-                - display_value: "Vacation"
-                  raw_value: "vacation"
-                - display_value: "Sick Leave"
-                  raw_value: "sick"
-                - display_value: "Personal Time"
-                  raw_value: "personal"
+              name: "pto_type_resolver"
+              data_type: "string"
+              description: "Resolves PTO type from user input or static options"
+              methods:
+                - method_name: "choose_from_existing_pto_balance_types"
+                  method_type: "Static"
+                  static_options:
+                    - display_value: "Vacation"
+                      raw_value: "vacation"
+                    - display_value: "Sick Leave"
+                      raw_value: "sick"
+                    - display_value: "Personal Time"
+                      raw_value: "personal"
         
         activities:
           - activity_type: "action"
@@ -72,28 +76,36 @@ plugins:
             slot_description: "The feature request to update"
             slot_inference_policy: "Infer slot value if available"
             resolver_strategy:
-              method_name: "search_feature_requests"
-              method_type: "Vector Search"
-              vector_store_name: "feature_requests"
-              similarity_threshold: 0.7
-              max_results: 5
+              name: "feature_request_resolver"
+              data_type: "object"
+              description: "Resolves feature requests using vector search"
+              methods:
+                - method_name: "search_feature_requests"
+                  method_type: "Dynamic"
+                  vector_store_name: "feature_requests"
+                  similarity_threshold: 0.7
+                  max_results: 5
           
           - name: "target_status"
             data_type: "string"
             slot_description: "New status for the feature request"
             slot_inference_policy: "Always explicitly ask for slot"
             resolver_strategy:
-              method_name: "choose_status"
-              method_type: "Static"
-              static_options:
-                - display_value: "In Progress"
-                  raw_value: "in_progress"
-                - display_value: "Completed"
-                  raw_value: "completed"
-                - display_value: "On Hold"
-                  raw_value: "on_hold"
-                - display_value: "Cancelled"
-                  raw_value: "cancelled"
+              name: "status_resolver"
+              data_type: "string"
+              description: "Resolves status options for feature requests"
+              methods:
+                - method_name: "choose_status"
+                  method_type: "Static"
+                  static_options:
+                    - display_value: "In Progress"
+                      raw_value: "in_progress"
+                    - display_value: "Completed"
+                      raw_value: "completed"
+                    - display_value: "On Hold"
+                      raw_value: "on_hold"
+                    - display_value: "Cancelled"
+                      raw_value: "cancelled"
         
         activities:
           - activity_type: "action"

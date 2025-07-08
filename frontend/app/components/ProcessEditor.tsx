@@ -21,19 +21,15 @@ interface ProcessEditorProps {
 interface Slot {
   id: string;
   name: string;
-  data_type: 'string' | 'number' | 'boolean' | 'custom_data_type';
+  data_type: 'string' | 'integer' | 'number' | 'boolean' | 'User' | 'object' |
+             'List[string]' | 'List[integer]' | 'List[number]' | 'List[boolean]' | 'List[User]' | 'List[object]' |
+             'custom_data_type';
   slot_description: string;
   slot_validation_policy: string;
   slot_validation_description: string;
   slot_inference_policy: 'infer_if_available' | 'always_ask_explicitly';
-  resolver_strategy?: {
-    method_name: string;
-    method_type: 'static' | 'api' | 'inline';
-    static_options?: Array<{
-      display_value: string;
-      raw_value: string;
-    }>;
-  };
+  resolver_strategy_name?: string; // Name of resolver strategy to use
+  custom_data_type_name?: string; // For custom data types
 }
 
 interface Activity {
@@ -55,11 +51,55 @@ export default function ProcessEditor({ process, isOpen, onClose, onSave }: Proc
     description: process?.description || '',
     triggers: Array.isArray(process?.triggers) ? process.triggers.join(', ') : '',
     keywords: Array.isArray(process?.keywords) ? process.keywords.join(', ') : '',
-    slots: process?.slots || [],
-    activities: process?.activities || [],
+    slots: Array.isArray(process?.slots) ? process.slots : [],
+    activities: Array.isArray(process?.activities) ? process.activities : [],
     permissions: process?.permissions || { user_groups: [], roles: [] },
-    required_connectors: process?.required_connectors || []
+    required_connectors: Array.isArray(process?.required_connectors) ? process.required_connectors : []
   });
+
+  const [fullProcessData, setFullProcessData] = useState<any>(null);
+  const [isLoadingFullData, setIsLoadingFullData] = useState(false);
+
+  // Fetch full process data when dialog opens
+  React.useEffect(() => {
+    const fetchFullProcessData = async () => {
+      if (process?.id && isOpen && !fullProcessData) {
+        setIsLoadingFullData(true);
+        try {
+          const response = await fetch(`/api/agent-studio/processes/${process.id}`);
+          if (response.ok) {
+            const fullData = await response.json();
+            setFullProcessData(fullData);
+
+            // Update editData with full process data including slots
+            setEditData({
+              name: fullData?.name || '',
+              description: fullData?.description || '',
+              triggers: Array.isArray(fullData?.triggers) ? fullData.triggers.join(', ') : '',
+              keywords: Array.isArray(fullData?.keywords) ? fullData.keywords.join(', ') : '',
+              slots: Array.isArray(fullData?.slots) ? fullData.slots : [],
+              activities: Array.isArray(fullData?.activities) ? fullData.activities : [],
+              permissions: fullData?.permissions || { user_groups: [], roles: [] },
+              required_connectors: Array.isArray(fullData?.required_connectors) ? fullData.required_connectors : []
+            });
+          }
+        } catch (error) {
+          console.error('Failed to fetch full process data:', error);
+        } finally {
+          setIsLoadingFullData(false);
+        }
+      }
+    };
+
+    fetchFullProcessData();
+  }, [process?.id, isOpen, fullProcessData]);
+
+  // Reset when dialog closes
+  React.useEffect(() => {
+    if (!isOpen) {
+      setFullProcessData(null);
+    }
+  }, [isOpen]);
 
   const [newSlot, setNewSlot] = useState<Partial<Slot>>({
     name: '',
@@ -67,7 +107,9 @@ export default function ProcessEditor({ process, isOpen, onClose, onSave }: Proc
     slot_description: '',
     slot_validation_policy: '',
     slot_validation_description: '',
-    slot_inference_policy: 'infer_if_available'
+    slot_inference_policy: 'infer_if_available',
+    resolver_strategy_name: '',
+    custom_data_type_name: ''
   });
 
   const [newActivity, setNewActivity] = useState<Partial<Activity>>({
@@ -82,13 +124,51 @@ export default function ProcessEditor({ process, isOpen, onClose, onSave }: Proc
     confirmation_policy: 'none'
   });
 
+  // State for editing existing slots
+  const [editingSlot, setEditingSlot] = useState<Slot | null>(null);
+  const [isEditingSlot, setIsEditingSlot] = useState(false);
+
   // Testing state
   const [testInput, setTestInput] = useState('');
   const [isTestRunning, setIsTestRunning] = useState(false);
   const [testResult, setTestResult] = useState<any>(null);
   const [validationResult, setValidationResult] = useState('');
 
+  // Resolver strategies and custom data types
+  const [resolverStrategies, setResolverStrategies] = useState<any[]>([]);
+  const [customDataTypes, setCustomDataTypes] = useState<any[]>([]);
+  const [loadingStrategies, setLoadingStrategies] = useState(false);
 
+  // Load resolver strategies and custom data types
+  React.useEffect(() => {
+    if (isOpen) {
+      loadResolverStrategies();
+      loadCustomDataTypes();
+    }
+  }, [isOpen]);
+
+  const loadResolverStrategies = async () => {
+    try {
+      setLoadingStrategies(true);
+      const response = await fetch('/api/agent-studio/resolver-strategies');
+      const data = await response.json();
+      setResolverStrategies(data.strategies || []);
+    } catch (error) {
+      console.error('Failed to load resolver strategies:', error);
+    } finally {
+      setLoadingStrategies(false);
+    }
+  };
+
+  const loadCustomDataTypes = async () => {
+    try {
+      const response = await fetch('/api/agent-studio/data-types');
+      const data = await response.json();
+      setCustomDataTypes(data.custom_data_types || []);
+    } catch (error) {
+      console.error('Failed to load custom data types:', error);
+    }
+  };
 
   const addSlot = () => {
     if (!newSlot.name) return;
@@ -101,7 +181,8 @@ export default function ProcessEditor({ process, isOpen, onClose, onSave }: Proc
       slot_validation_policy: newSlot.slot_validation_policy || '',
       slot_validation_description: newSlot.slot_validation_description || '',
       slot_inference_policy: newSlot.slot_inference_policy || 'infer_if_available',
-      resolver_strategy: newSlot.resolver_strategy
+      resolver_strategy_name: newSlot.resolver_strategy_name,
+      custom_data_type_name: newSlot.custom_data_type_name
     };
 
     setEditData(prev => ({
@@ -124,6 +205,30 @@ export default function ProcessEditor({ process, isOpen, onClose, onSave }: Proc
       ...prev,
       slots: prev.slots.filter((s: Slot) => s.id !== slotId)
     }));
+  };
+
+  const startEditSlot = (slot: Slot) => {
+    setEditingSlot({ ...slot });
+    setIsEditingSlot(true);
+  };
+
+  const saveEditSlot = () => {
+    if (!editingSlot) return;
+
+    setEditData(prev => ({
+      ...prev,
+      slots: prev.slots.map((s: Slot) =>
+        s.id === editingSlot.id ? editingSlot : s
+      )
+    }));
+
+    setEditingSlot(null);
+    setIsEditingSlot(false);
+  };
+
+  const cancelEditSlot = () => {
+    setEditingSlot(null);
+    setIsEditingSlot(false);
   };
 
   const addActivity = () => {
@@ -348,9 +453,25 @@ export default function ProcessEditor({ process, isOpen, onClose, onSave }: Proc
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
+                      {/* Primitive Data Types */}
                       <SelectItem value="string">string</SelectItem>
+                      <SelectItem value="integer">integer</SelectItem>
                       <SelectItem value="number">number</SelectItem>
                       <SelectItem value="boolean">boolean</SelectItem>
+
+                      {/* Object Data Types */}
+                      <SelectItem value="User">User</SelectItem>
+                      <SelectItem value="object">object</SelectItem>
+
+                      {/* List Data Types */}
+                      <SelectItem value="List[string]">List[string]</SelectItem>
+                      <SelectItem value="List[integer]">List[integer]</SelectItem>
+                      <SelectItem value="List[number]">List[number]</SelectItem>
+                      <SelectItem value="List[boolean]">List[boolean]</SelectItem>
+                      <SelectItem value="List[User]">List[User]</SelectItem>
+                      <SelectItem value="List[object]">List[object]</SelectItem>
+
+                      {/* Custom Data Types */}
                       <SelectItem value="custom_data_type">Custom Data Type</SelectItem>
                     </SelectContent>
                   </Select>
@@ -395,6 +516,66 @@ export default function ProcessEditor({ process, isOpen, onClose, onSave }: Proc
                 </div>
               </div>
 
+              {/* Resolver Strategy Configuration */}
+              <div className="border-t pt-4">
+                <h5 className="font-medium mb-3">Resolver Strategy (Optional)</h5>
+                <div className="space-y-4">
+                  <div>
+                    <Label>Resolver Strategy</Label>
+                    <Select
+                      value={newSlot.resolver_strategy_name || 'none'}
+                      onValueChange={(value) => setNewSlot(prev => ({
+                        ...prev,
+                        resolver_strategy_name: value === "none" ? undefined : value
+                      }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select a resolver strategy..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">None (use data type default)</SelectItem>
+                        {resolverStrategies.map((strategy) => (
+                          <SelectItem key={strategy.id} value={strategy.name}>
+                            {strategy.name} ({strategy.data_type})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {loadingStrategies && (
+                      <p className="text-sm text-gray-500 mt-1">Loading resolver strategies...</p>
+                    )}
+                  </div>
+
+                  {/* Custom Data Type Selection */}
+                  {newSlot.data_type === 'custom_data_type' && (
+                    <div>
+                      <Label>Custom Data Type</Label>
+                      <Select
+                        value={newSlot.custom_data_type_name || ''}
+                        onValueChange={(value) => setNewSlot(prev => ({
+                          ...prev,
+                          custom_data_type_name: value || undefined
+                        }))}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select a custom data type..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {customDataTypes.map((dataType) => (
+                            <SelectItem key={dataType.id} value={dataType.name}>
+                              {dataType.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+
+
+
               <div className="flex justify-end">
                 <Button onClick={addSlot} size="sm">
                   <Plus className="w-4 h-4 mr-1" />
@@ -404,8 +585,13 @@ export default function ProcessEditor({ process, isOpen, onClose, onSave }: Proc
             </div>
 
             <div className="space-y-2">
-              <h4 className="font-medium">Configured Slots ({editData.slots.length})</h4>
-              {editData.slots.map((slot: Slot) => (
+              <h4 className="font-medium">
+                Configured Slots ({editData.slots.length})
+                {isLoadingFullData && <span className="text-sm text-gray-500 ml-2">(Loading...)</span>}
+              </h4>
+              {isLoadingFullData ? (
+                <div className="text-center py-4 text-gray-500">Loading slots...</div>
+              ) : editData.slots.map((slot: Slot) => (
                 <div key={slot.id} className="border rounded p-4">
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-3">
@@ -415,28 +601,159 @@ export default function ProcessEditor({ process, isOpen, onClose, onSave }: Proc
                         <Badge variant="secondary">Always Ask</Badge>
                       )}
                     </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => removeSlot(slot.id)}
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => startEditSlot(slot)}
+                      >
+                        <Settings className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => removeSlot(slot.id)}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </div>
                   </div>
                   <div className="text-sm text-gray-600 mb-2">{slot.slot_description}</div>
-                  {slot.slot_validation_policy && (
-                    <div className="text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded">
-                      Validation: {slot.slot_validation_policy}
-                    </div>
-                  )}
+
+                  <div className="grid grid-cols-2 gap-4 text-xs">
+                    {slot.slot_validation_policy && (
+                      <div className="text-blue-600 bg-blue-50 px-2 py-1 rounded">
+                        <span className="font-medium">Validation:</span> {slot.slot_validation_policy}
+                      </div>
+                    )}
+                    {slot.resolver_strategy_name && (
+                      <div className="text-purple-600 bg-purple-50 px-2 py-1 rounded">
+                        <span className="font-medium">Resolver Strategy:</span> {slot.resolver_strategy_name}
+                      </div>
+                    )}
+                    {slot.custom_data_type_name && (
+                      <div className="text-blue-600 bg-blue-50 px-2 py-1 rounded">
+                        <span className="font-medium">Custom Type:</span> {slot.custom_data_type_name}
+                      </div>
+                    )}
+                  </div>
                 </div>
               ))}
-              {editData.slots.length === 0 && (
+              {!isLoadingFullData && editData.slots.length === 0 && (
                 <div className="text-center py-8 text-gray-500">
                   No slots configured. Add slots to collect user information.
                 </div>
               )}
             </div>
+
+            {/* Edit Slot Dialog */}
+            {isEditingSlot && editingSlot && (
+              <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                <div className="bg-white rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+                  <h3 className="text-lg font-medium mb-4">Edit Slot: {editingSlot.name}</h3>
+
+                  <div className="grid grid-cols-2 gap-4 mb-4">
+                    <div>
+                      <Label>Slot Name</Label>
+                      <Input
+                        value={editingSlot.name}
+                        onChange={(e) => setEditingSlot(prev => prev ? { ...prev, name: e.target.value } : null)}
+                      />
+                    </div>
+                    <div>
+                      <Label>Data Type</Label>
+                      <Select
+                        value={editingSlot.data_type}
+                        onValueChange={(value) => setEditingSlot(prev => prev ? { ...prev, data_type: value as any } : null)}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="string">string</SelectItem>
+                          <SelectItem value="integer">integer</SelectItem>
+                          <SelectItem value="number">number</SelectItem>
+                          <SelectItem value="boolean">boolean</SelectItem>
+                          <SelectItem value="User">User</SelectItem>
+                          <SelectItem value="object">object</SelectItem>
+                          <SelectItem value="List[string]">List[string]</SelectItem>
+                          <SelectItem value="List[integer]">List[integer]</SelectItem>
+                          <SelectItem value="List[number]">List[number]</SelectItem>
+                          <SelectItem value="List[boolean]">List[boolean]</SelectItem>
+                          <SelectItem value="List[User]">List[User]</SelectItem>
+                          <SelectItem value="List[object]">List[object]</SelectItem>
+                          <SelectItem value="custom_data_type">Custom Data Type</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+
+                  <div className="mb-4">
+                    <Label>Slot Description</Label>
+                    <Textarea
+                      value={editingSlot.slot_description}
+                      onChange={(e) => setEditingSlot(prev => prev ? { ...prev, slot_description: e.target.value } : null)}
+                      placeholder="Describe what this slot collects..."
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4 mb-4">
+                    <div>
+                      <Label>Validation Policy</Label>
+                      <Input
+                        value={editingSlot.slot_validation_policy}
+                        onChange={(e) => setEditingSlot(prev => prev ? { ...prev, slot_validation_policy: e.target.value } : null)}
+                        placeholder="e.g., value > 0"
+                      />
+                    </div>
+                    <div>
+                      <Label>Inference Policy</Label>
+                      <Select
+                        value={editingSlot.slot_inference_policy}
+                        onValueChange={(value) => setEditingSlot(prev => prev ? { ...prev, slot_inference_policy: value as any } : null)}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="infer_if_available">Infer slot value if available</SelectItem>
+                          <SelectItem value="always_ask_explicitly">Always explicitly ask for slot</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+
+                  {editingSlot.data_type === 'custom_data_type' && (
+                    <div className="mb-4">
+                      <Label>Custom Data Type Name</Label>
+                      <Input
+                        value={editingSlot.custom_data_type_name || ''}
+                        onChange={(e) => setEditingSlot(prev => prev ? { ...prev, custom_data_type_name: e.target.value } : null)}
+                        placeholder="e.g., u_JiraIssue"
+                      />
+                    </div>
+                  )}
+
+                  <div className="mb-4">
+                    <Label>Resolver Strategy (Optional)</Label>
+                    <Input
+                      value={editingSlot.resolver_strategy_name || ''}
+                      onChange={(e) => setEditingSlot(prev => prev ? { ...prev, resolver_strategy_name: e.target.value } : null)}
+                      placeholder="Override default resolver strategy"
+                    />
+                  </div>
+
+                  <div className="flex justify-end gap-2">
+                    <Button variant="outline" onClick={cancelEditSlot}>
+                      Cancel
+                    </Button>
+                    <Button onClick={saveEditSlot}>
+                      Save Changes
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
           </TabsContent>
 
           <TabsContent value="activities" className="space-y-4">

@@ -366,7 +366,7 @@ const AgentStudio: React.FC = () => {
                     <Label htmlFor="conn-name">Name</Label>
                     <Input
                       id="conn-name"
-                      value={newConnector.name}
+                      valueHUMAN_IN_LOOP_TOOLS={newConnector.name}
                       onChange={(e) => setNewConnector({...newConnector, name: e.target.value})}
                       placeholder="Connector name"
                     />

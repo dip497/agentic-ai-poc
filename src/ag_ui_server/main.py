@@ -8,16 +8,21 @@ and emits real-time events for the frontend.
 import asyncio
 import logging
 import json
+import os
 from typing import Dict, List, Any, Optional, AsyncGenerator
 from datetime import datetime
 import uuid
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from ..agent.conversational_agent import MoveworksConversationalAgent
+from ..reasoning.moveworks_reasoning_engine import MoveworksThreeLoopEngine, create_moveworks_reasoning_engine
 from ..agent_studio.api import create_agent_studio_router
 from ..agent_studio.database import agent_studio_db
 from ..agent_studio.langgraph_integration import agent_studio_integration
@@ -104,20 +109,48 @@ class AGUIServer:
         self.connection_manager = ConnectionManager()
         
         # Initialize components
-        self.agent_router: Optional[EmbeddingBasedAgentRouter] = None
-        self.agent_factory: Optional[AgentFactory] = None
-        self.default_reasoning_agent: Optional[MoveworksReasoningAgent] = None
+        self.reasoning_engine: Optional[MoveworksThreeLoopEngine] = None
+        self._initialization_lock = asyncio.Lock()
+        self._initialized = False
         
         # Setup middleware and routes
         self._setup_middleware()
         self._setup_routes()
         self._setup_agent_studio()
+
+    async def _ensure_initialized(self):
+        """Ensure the reasoning engine is initialized."""
+        if self._initialized:
+            return
+
+        async with self._initialization_lock:
+            if self._initialized:
+                return
+
+            try:
+                logger.info("🔄 Initializing reasoning engine...")
+                print("🔄 Initializing reasoning engine...")
+
+                # Initialize Agent Studio database
+                await agent_studio_db.initialize()
+
+                # Initialize the reasoning engine
+                self.reasoning_engine = await create_moveworks_reasoning_engine()
+
+                self._initialized = True
+                logger.info("✅ Reasoning engine initialized successfully")
+                print("✅ Reasoning engine initialized successfully")
+
+            except Exception as e:
+                logger.error(f"❌ Failed to initialize reasoning engine: {e}")
+                print(f"❌ Failed to initialize reasoning engine: {e}")
+                raise
     
     def _setup_middleware(self):
         """Setup CORS and other middleware."""
         self.app.add_middleware(
             CORSMiddleware,
-            allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+            allow_origins=["*"],
             allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["*"],
@@ -238,6 +271,30 @@ class AGUIServer:
                 }
             })
 
+        @self.app.post("/api/chat/resume")
+        async def chat_resume_endpoint(request: dict):
+            """Resume interrupted conversation with user input."""
+            try:
+                session_id = request.get("session_id")
+                user_response = request.get("user_response")
+
+                if not session_id or user_response is None:
+                    return {
+                        "success": False,
+                        "error": "session_id and user_response are required"
+                    }
+
+                response = await self._resume_chat_conversation(session_id, user_response)
+                return response
+
+            except Exception as e:
+                logger.error(f"Chat resume endpoint error: {e}")
+                return {
+                    "response": f"Error resuming conversation: {str(e)}",
+                    "success": False,
+                    "error": str(e)
+                }
+
         @self.app.get("/api/connectors/test")
         async def test_connectors():
             """Test all connectors and return their status."""
@@ -316,44 +373,148 @@ class AGUIServer:
         session_id: str,
         user_attributes: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """Process a chat message and return response."""
+        """Process a chat message using Moveworks reasoning engine."""
         try:
-            # Route to appropriate agent
-            if self.agent_router and self.agent_factory:
-                agent_id, confidence, routing_info = await self.agent_router.route_to_agent(
-                    content, user_id, session_id, user_attributes
-                )
-                
-                if agent_id:
-                    reasoning_agent = self.agent_factory.get_agent(agent_id)
-                    if reasoning_agent:
-                        response = await reasoning_agent.process_message(
-                            content, user_id, session_id, user_attributes
-                        )
-                        response["routing_info"] = routing_info
-                        response["selected_agent"] = agent_id
-                        return response
-            
-            # Fallback to default agent
-            if self.default_reasoning_agent:
-                response = await self.default_reasoning_agent.process_message(
-                    content, user_id, session_id, user_attributes
-                )
-                response["routing_info"] = {"reason": "fallback_to_default"}
-                response["selected_agent"] = "default"
-                return response
-            
-            # No agents available
-            return {
-                "response": "I'm sorry, but I'm not available right now. Please try again later.",
-                "success": False,
-                "error": "No agents available"
+            # Ensure reasoning engine is initialized
+            await self._ensure_initialized()
+
+            if not self.reasoning_engine:
+                return {
+                    "response": "Reasoning engine not initialized. Please try again later.",
+                    "success": False,
+                    "error": "No reasoning engine available"
+                }
+
+            # Prepare user context
+            user_context = {
+                "user_id": user_id,
+                "session_id": session_id,
+                "department": user_attributes.get("department", "unknown") if user_attributes else "unknown",
+                "role": user_attributes.get("role", "user") if user_attributes else "user",
+                "email": user_attributes.get("email", f"{user_id}@company.com") if user_attributes else f"{user_id}@company.com"
             }
-            
+
+            # Process through Moveworks three-loop reasoning with interrupt handling
+            config = {"configurable": {"thread_id": session_id}}
+
+            try:
+                reasoning_result = await self.reasoning_engine.process_request(
+                    user_query=content,
+                    user_context=user_context,
+                    conversation_id=session_id
+                )
+            except Exception as e:
+                # Check if this is a LangGraph interrupt
+                if hasattr(e, '__interrupt__') or "interrupt" in str(e).lower():
+                    # This is an interrupt, not an error - handle it properly
+                    return await self._handle_langgraph_interrupt(session_id, content, user_context)
+                else:
+                    raise e
+
+            # Format response
+            return {
+                "response": reasoning_result.response,
+                "success": reasoning_result.success,
+                "selected_plugins": reasoning_result.selected_plugins,
+                "user_actions": reasoning_result.user_actions,
+                "execution_summary": reasoning_result.execution_summary,
+                "conversation_id": reasoning_result.conversation_id,
+                "timestamp": reasoning_result.timestamp.isoformat()
+            }
+
         except Exception as e:
             logger.error(f"Error processing chat message: {e}")
             return {
                 "response": f"I encountered an error: {str(e)}",
+                "success": False,
+                "error": str(e)
+            }
+
+    async def _handle_langgraph_interrupt(
+        self,
+        session_id: str,
+        content: str,
+        user_context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Handle LangGraph interrupt by getting state and returning interrupt info."""
+        try:
+            if not self.reasoning_engine or not self.reasoning_engine.graph:
+                return {
+                    "response": "Reasoning engine not available for interrupt handling.",
+                    "success": False,
+                    "error": "No reasoning engine"
+                }
+
+            # Get the current state from LangGraph
+            config = {"configurable": {"thread_id": session_id}}
+            state = self.reasoning_engine.graph.get_state(config)
+
+            if state and hasattr(state, 'interrupts') and state.interrupts:
+                interrupt_data = state.interrupts[0].value
+
+                return {
+                    "response": "I need your input to continue.",
+                    "success": True,
+                    "interrupt": True,
+                    "interrupt_data": interrupt_data,
+                    "session_id": session_id,
+                    "awaiting_user_input": True
+                }
+            else:
+                return {
+                    "response": "Process paused, but no interrupt data available.",
+                    "success": True,
+                    "interrupt": True,
+                    "session_id": session_id,
+                    "awaiting_user_input": True
+                }
+
+        except Exception as e:
+            logger.error(f"Error handling LangGraph interrupt: {e}")
+            return {
+                "response": f"Error handling interrupt: {str(e)}",
+                "success": False,
+                "error": str(e)
+            }
+
+    async def _resume_chat_conversation(
+        self,
+        session_id: str,
+        user_response: Any
+    ) -> Dict[str, Any]:
+        """Resume interrupted LangGraph conversation with user input."""
+        try:
+            if not self.reasoning_engine or not self.reasoning_engine.graph:
+                return {
+                    "response": "Reasoning engine not available for resuming.",
+                    "success": False,
+                    "error": "No reasoning engine"
+                }
+
+            # Resume the LangGraph execution with user input
+            from langgraph.types import Command
+            config = {"configurable": {"thread_id": session_id}}
+
+            reasoning_result = await self.reasoning_engine.graph.ainvoke(
+                Command(resume=user_response),
+                config=config
+            )
+
+            # Convert to standard response format
+            return {
+                "response": reasoning_result.get("final_response", "Process completed."),
+                "success": True,
+                "selected_plugins": reasoning_result.get("selected_plugins", []),
+                "user_actions": reasoning_result.get("user_actions", []),
+                "execution_summary": reasoning_result.get("execution_summary", {}),
+                "conversation_id": session_id,
+                "timestamp": datetime.now().isoformat()
+            }
+
+        except Exception as e:
+            logger.error(f"Error resuming conversation: {e}")
+            return {
+                "response": f"Error resuming conversation: {str(e)}",
                 "success": False,
                 "error": str(e)
             }
@@ -397,8 +558,8 @@ class AGUIServer:
                 }
             )
 
-            # Use the conversational agent for processing
-            conversational_agent = self.conversational_agent
+            # Ensure reasoning engine is initialized
+            await self._ensure_initialized()
 
             # Send reasoning started event
             yield AGUIEvent(
@@ -410,56 +571,142 @@ class AGUIServer:
                 }
             )
 
-            # Process message with conversational agent
-            if conversational_agent:
-                result = await conversational_agent.process_message(
-                    content, user_id, session_id, user_attributes
+            # Process message with reasoning engine
+            if self.reasoning_engine:
+                # Prepare user context
+                user_context = {
+                    "user_id": user_id,
+                    "session_id": session_id,
+                    "department": user_attributes.get("department", "unknown") if user_attributes else "unknown",
+                    "role": user_attributes.get("role", "user") if user_attributes else "user",
+                }
+
+                result = await self.reasoning_engine.process_request(
+                    user_query=content,
+                    user_context=user_context,
+                    conversation_id=session_id
                 )
 
-                # Send reasoning steps from the agent
-                reasoning_trace = result.get("reasoning_trace", [])
-                for step in reasoning_trace:
-                    await asyncio.sleep(0.3)  # Show processing time
-                    yield AGUIEvent(
-                        type="REASONING_STEP",
-                        data={
-                            "step": step.get("step", "unknown"),
-                            "action": step.get("action", "Processing..."),
-                            "status": step.get("status", "pending"),
-                            "timestamp": step.get("timestamp", datetime.now().isoformat())
-                        }
-                    )
+                # Send reasoning steps (simplified for now)
+                yield AGUIEvent(
+                    type="REASONING_STEP",
+                    data={
+                        "step": "processing",
+                        "action": "Analyzing request with Moveworks reasoning engine...",
+                        "status": "completed",
+                        "timestamp": datetime.now().isoformat()
+                    }
+                )
 
-                response_text = result.get("content", "I processed your request.")
+                response_text = result.response
 
                 # Send plugin information if used
-                if result.get("plugin_used"):
-                    yield AGUIEvent(
-                        type="PLUGIN_EXECUTED",
-                        data={
-                            "plugin_name": result.get("plugin_used"),
-                            "process_name": result.get("process_name"),
-                            "timestamp": datetime.now().isoformat()
-                        }
-                    )
+                if result.selected_plugins:
+                    for plugin in result.selected_plugins:
+                        yield AGUIEvent(
+                            type="PLUGIN_EXECUTED",
+                            data={
+                                "plugin_name": plugin,
+                                "timestamp": datetime.now().isoformat()
+                            }
+                        )
+
+                # Check if human-in-the-loop actions are needed
+                if result.user_actions:
+                    for action in result.user_actions:
+                        yield AGUIEvent(
+                            type="CONFIRMATION_REQUIRED",
+                            data={
+                                "action": action.get("action", "Unknown action"),
+                                "importance": action.get("importance", "medium"),
+                                "timestamp": datetime.now().isoformat()
+                            }
+                        )
             else:
                 # Fallback if no conversational agent
                 response_text = "I'll process your request and ensure you get the help you need for this matter."
 
-            # Check for confirmation scenarios
-            if any(word in content.lower() for word in ["delete", "remove", "reset", "password"]):
-                yield AGUIEvent(
-                    type="CONFIRMATION_REQUIRED",
-                    data={
-                        "confirmation": {
-                            "action": f"Proceed with: {content}",
-                            "importance": "high",
-                            "timestamp": datetime.now().isoformat()
-                        },
-                        "session_id": session_id
-                    }
+            # Process through reasoning engine and handle interrupts
+            try:
+                user_context = {
+                    "user_id": user_id,
+                    "session_id": session_id,
+                    "department": user_attributes.get("department", "unknown") if user_attributes else "unknown",
+                    "role": user_attributes.get("role", "user") if user_attributes else "user"
+                }
+
+                reasoning_result = await self.reasoning_engine.process_request(
+                    user_query=content,
+                    user_context=user_context,
+                    conversation_id=session_id
                 )
-                return
+
+                response_text = reasoning_result.response
+
+                # Send plugin information if used
+                if reasoning_result.selected_plugins:
+                    yield AGUIEvent(
+                        type="PLUGIN_EXECUTED",
+                        data={
+                            "plugins": reasoning_result.selected_plugins,
+                            "execution_summary": reasoning_result.execution_summary,
+                            "timestamp": datetime.now().isoformat()
+                        }
+                    )
+
+            except Exception as e:
+                # Check if this is a LangGraph interrupt
+                if hasattr(e, '__interrupt__') or "interrupt" in str(e).lower():
+                    # Handle interrupt by emitting AG-UI event
+                    interrupt_info = await self._handle_langgraph_interrupt(session_id, content, user_context)
+
+                    if interrupt_info.get("interrupt_data"):
+                        interrupt_data = interrupt_info["interrupt_data"]
+
+                        if interrupt_data.get("type") == "user_confirmation":
+                            yield AGUIEvent(
+                                type="CONFIRMATION_REQUIRED",
+                                data={
+                                    "confirmation": {
+                                        "action": interrupt_data.get("question", "Proceed?"),
+                                        "importance": "high",
+                                        "options": interrupt_data.get("options", ["yes", "no"]),
+                                        "status": interrupt_data.get("status", ""),
+                                        "timestamp": datetime.now().isoformat()
+                                    },
+                                    "session_id": session_id
+                                }
+                            )
+                            return
+                        else:
+                            # Generic interrupt
+                            yield AGUIEvent(
+                                type="USER_INPUT_REQUIRED",
+                                data={
+                                    "message": interrupt_data.get("question", "I need your input to continue."),
+                                    "options": interrupt_data.get("options", []),
+                                    "session_id": session_id,
+                                    "timestamp": datetime.now().isoformat()
+                                }
+                            )
+                            return
+                    else:
+                        # Fallback for unknown interrupt
+                        yield AGUIEvent(
+                            type="CONFIRMATION_REQUIRED",
+                            data={
+                                "confirmation": {
+                                    "action": "Continue processing?",
+                                    "importance": "medium",
+                                    "timestamp": datetime.now().isoformat()
+                                },
+                                "session_id": session_id
+                            }
+                        )
+                        return
+                else:
+                    # Real error, not an interrupt
+                    response_text = f"I encountered an error: {str(e)}"
 
             # Check for slot clarification scenarios
             if any(word in content.lower() for word in ["book", "schedule", "meeting"]) and "when" not in content.lower():
@@ -551,18 +798,56 @@ class AGUIServer:
             # Initialize Agent Studio database
             await agent_studio_db.initialize()
 
-            # For now, skip the complex agent router and just use simple mode
-            # TODO: Re-enable when database and API keys are properly configured
-            logger.info("Initializing AG-UI server in simple mode...")
+            # Initialize the simple reasoning engine
+            logger.info("Initializing AG-UI server with reasoning engine...")
 
-            # Initialize the conversational agent with LangGraph reasoning
-            self.conversational_agent = MoveworksConversationalAgent()
+            self.reasoning_engine = await create_moveworks_reasoning_engine()
 
             logger.info("AG-UI server initialized successfully")
 
         except Exception as e:
             logger.error(f"Failed to initialize AG-UI server: {e}")
             raise
+
+
+# Create global server instance
+server = AGUIServer()
+
+# Add startup event to initialize the server
+@server.app.on_event("startup")
+async def startup_event():
+    """Initialize the server on startup."""
+    print("🔄 Startup event triggered - initializing server...")
+    logger.info("Startup event triggered - initializing server...")
+    try:
+        await server.initialize()
+        print("✅ Server initialization completed successfully")
+        logger.info("Server initialization completed successfully")
+    except Exception as e:
+        print(f"❌ Server initialization failed: {e}")
+        logger.error(f"Server initialization failed: {e}")
+        raise
+
+# Create the app instance for uvicorn
+app = server.app
+
+# Main execution block
+if __name__ == "__main__":
+    import uvicorn
+
+    print("🚀 Starting AG-UI Server with Moveworks Three-Loop Reasoning...")
+
+    # Create server instance
+    server = AGUIServer()
+
+    # Run the server
+    uvicorn.run(
+        server.app,
+        host="0.0.0.0",
+        port=8000,
+        log_level="info",
+        reload=False
+    )
 
     async def shutdown(self) -> None:
         """Shutdown the server and cleanup resources."""
