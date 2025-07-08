@@ -50,9 +50,8 @@ class MoveworksPluginSelector:
 
     async def initialize(self):
         """Initialize the plugin selector with LLM and load plugins."""
-        # Initialize LLM
-        llm_factory = LLMFactory()
-        self.llm = llm_factory.create_llm("gemini", model="gemini-1.5-flash")
+        # Initialize LLM using centralized configuration
+        self.llm = LLMFactory.get_fast_llm()
 
         # Load plugins from configuration
         await self._load_plugins()

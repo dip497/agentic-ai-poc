@@ -9,6 +9,8 @@ from datetime import datetime
 from enum import Enum
 import uuid
 
+from config.reasoning_config import get_reasoning_config
+
 from .memory_constructs import MemorySnapshot, WorkingMemoryEntry
 
 
@@ -139,7 +141,7 @@ class ReasoningState:
     current_plan: Optional[Plan] = None
     plan_history: List[Plan] = field(default_factory=list)
     planning_iterations: int = 0
-    max_planning_iterations: int = 3
+    max_planning_iterations: int = field(default_factory=lambda: get_reasoning_config().planning_iterations_max)
     
     # Execution Iteration Loop State
     current_step: Optional[PlanStep] = None

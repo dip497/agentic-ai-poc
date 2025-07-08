@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from .plugin_selection_engine import PluginSelectionResult
 from models.moveworks import Plugin, ConversationalProcess
 from config.loader import MoveworksConfigLoader
+from config.reasoning_config import get_reasoning_config
 from llm.llm_factory import LLMFactory
 
 logger = logging.getLogger(__name__)
@@ -53,14 +54,14 @@ class MultiPluginResponseEngine:
     def __init__(self, config_loader: MoveworksConfigLoader):
         self.config_loader = config_loader
         self.llm = None
-        self.max_parallel_plugins = 3
-        self.response_timeout = 30.0  # seconds
+
+        # Load configuration from environment
+        self.reasoning_config = get_reasoning_config()
 
     async def initialize(self):
         """Initialize the multi-plugin response engine."""
-        # Initialize LLM for response combination
-        llm_factory = LLMFactory()
-        self.llm = llm_factory.create_llm("gemini", model="gemini-1.5-flash")
+        # Initialize LLM for response combination using centralized configuration
+        self.llm = LLMFactory.get_reasoning_llm()
 
         logger.info("Multi-plugin response engine initialized")
     
@@ -94,7 +95,7 @@ class MultiPluginResponseEngine:
         start_time = datetime.now()
         
         # Limit number of plugins to execute in parallel
-        plugins_to_execute = selected_plugins[:self.max_parallel_plugins]
+        plugins_to_execute = selected_plugins[:self.reasoning_config.max_parallel_plugins]
         
         logger.info(f"Executing {len(plugins_to_execute)} plugins in parallel for query: {user_query[:50]}...")
         
@@ -115,10 +116,10 @@ class MultiPluginResponseEngine:
         try:
             plugin_results = await asyncio.wait_for(
                 asyncio.gather(*execution_tasks, return_exceptions=True),
-                timeout=self.response_timeout
+                timeout=self.reasoning_config.response_timeout
             )
         except asyncio.TimeoutError:
-            logger.warning(f"Plugin execution timeout after {self.response_timeout}s")
+            logger.warning(f"Plugin execution timeout after {self.reasoning_config.response_timeout}s")
             plugin_results = [
                 PluginExecutionResult(
                     plugin_name="timeout",
@@ -162,7 +163,7 @@ class MultiPluginResponseEngine:
             "successful_plugins": len(successful_results),
             "failed_plugins": len(failed_results),
             "execution_time": execution_time,
-            "timeout_occurred": execution_time >= self.response_timeout
+            "timeout_occurred": execution_time >= self.reasoning_config.response_timeout
         }
         
         logger.info(f"Multi-plugin execution completed: {len(successful_results)} successful, {len(failed_results)} failed")

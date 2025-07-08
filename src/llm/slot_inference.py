@@ -46,19 +46,11 @@ class MoveworksSlotInference:
     
     def __init__(self, llm_config: Optional[Dict[str, Any]] = None):
         """Initialize the slot inference system."""
-        # Use LLM factory to create Gemini instance
-        import os
+        # Use centralized LLM configuration
         from .llm_factory import LLMFactory
 
-        # Set the API key
-        os.environ["GOOGLE_API_KEY"] = "AIzaSyC9vwixXT9XdbFzCfFapNR21wYA5ma7LDg"
-
-        self.llm = LLMFactory.create_llm(
-            provider="gemini",
-            model="gemini-1.5-flash",
-            temperature=0.1,
-            max_tokens=1000
-        )
+        # Use fast LLM for slot inference (optimized for quick responses)
+        self.llm = LLMFactory.get_fast_llm(max_tokens=1000)
 
         self.output_parser = PydanticOutputParser(pydantic_object=SlotInferenceOutput)
 

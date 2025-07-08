@@ -10,6 +10,8 @@ from enum import Enum
 import uuid
 import json
 
+from config.reasoning_config import get_reasoning_config
+
 
 class MemoryType(Enum):
     """Types of memory constructs in the Moveworks architecture."""
@@ -94,17 +96,20 @@ class ConversationContext:
         message.sequence_number = len(self.messages)
         self.messages.append(message)
         
-        # Maintain window size - keep last 20 messages
-        if len(self.messages) > 20:
-            self.messages = self.messages[-20:]
+        # Maintain window size - keep last N messages (configurable)
+        config = get_reasoning_config()
+        if len(self.messages) > config.memory_window_size:
+            self.messages = self.messages[-config.memory_window_size:]
             # Update sequence numbers
             for i, msg in enumerate(self.messages):
                 msg.sequence_number = i
         
         self.last_updated = datetime.now()
     
-    def get_recent_context(self, max_messages: int = 6) -> List[EpisodicMemoryEntry]:
-        """Get recent context (default 6 messages as per Moveworks)."""
+    def get_recent_context(self, max_messages: Optional[int] = None) -> List[EpisodicMemoryEntry]:
+        """Get recent context (configurable, default from reasoning config)."""
+        if max_messages is None:
+            max_messages = get_reasoning_config().memory_window_min
         return self.messages[-max_messages:] if self.messages else []
 
 
@@ -167,7 +172,13 @@ class WorkingMemoryEntry:
             }
         
         self.updated_at = datetime.now()
-    
+
+    def add_reference(self, reference: str):
+        """Add a reference for grounding responses."""
+        if reference not in self.references:
+            self.references.append(reference)
+        self.updated_at = datetime.now()
+
     def add_step(self, step_name: str, result: Any, references: Optional[List[str]] = None):
         """Add a process step with results and references."""
         step = {

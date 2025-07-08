@@ -20,6 +20,7 @@ from reasoning.multi_plugin_response import MultiPluginResponseEngine
 from reasoning.memory_constructs import MemorySnapshot
 from reasoning.moveworks_memory_manager import MoveworksMemoryManager
 from config.loader import MoveworksConfigLoader
+from config.reasoning_config import get_reasoning_config
 from llm.llm_factory import LLMFactory
 
 logger = logging.getLogger(__name__)
@@ -88,18 +89,16 @@ class MoveworksThreeLoopEngine:
         self.memory_manager = None
         self.llm = None
         self.graph = None
-        
-        # Configuration
-        self.max_planning_iterations = 3
-        self.max_execution_steps = 5
+
+        # Load configuration from environment
+        self.reasoning_config = get_reasoning_config()
         
     async def initialize(self):
         """Initialize all components and build the reasoning graph."""
         logger.info("Initializing Moveworks Three-Loop Reasoning Engine...")
         
-        # Initialize LLM
-        llm_factory = LLMFactory()
-        self.llm = llm_factory.create_llm("gemini", model="gemini-1.5-flash")
+        # Initialize LLM using centralized configuration
+        self.llm = LLMFactory.get_reasoning_llm()
         
         # Initialize plugin selector
         self.plugin_selector = MoveworksPluginSelector(self.config_loader)
@@ -236,7 +235,12 @@ class MoveworksThreeLoopEngine:
             memory_snapshot = await self.memory_manager.get_memory_snapshot(
                 state["conversation_id"], state["user_context"]
             )
-            state["memory_snapshot"] = memory_snapshot.model_dump() if memory_snapshot else None
+            # Convert dataclass to dict for serialization
+            if memory_snapshot:
+                import dataclasses
+                state["memory_snapshot"] = dataclasses.asdict(memory_snapshot)
+            else:
+                state["memory_snapshot"] = None
         except Exception as e:
             logger.warning(f"Failed to load memory: {e}")
             state["memory_snapshot"] = None
@@ -250,7 +254,7 @@ class MoveworksThreeLoopEngine:
         """
         logger.info("Starting Planning Iteration Loop...")
         
-        for iteration in range(self.max_planning_iterations):
+        for iteration in range(self.reasoning_config.planning_iterations_max):
             state["plan_iterations"] = iteration + 1
             
             # Step 1: Generate plan using LLM planner
@@ -286,7 +290,7 @@ class MoveworksThreeLoopEngine:
         plan_steps = state["current_plan"].get("steps", [])
         
         for step_idx, step in enumerate(plan_steps):
-            if state["execution_step"] >= self.max_execution_steps:
+            if state["execution_step"] >= self.reasoning_config.execution_steps_max:
                 break
                 
             state["execution_step"] = step_idx + 1

@@ -70,7 +70,7 @@ class CustomDataType(BaseModel):
     """Custom data type with u_<DataTypeName> convention."""
     name: str = Field(..., description="Data type name (must follow u_<DataTypeName> convention)")
     description: str = Field(..., description="Detailed description for AI triggering accuracy")
-    data_schema: Dict[str, Any] = Field(..., description="JSON schema definition", alias="schema")
+    data_schema: Dict[str, Any] = Field(..., description="JSON schema definition")
     default_resolver_strategy: Optional[str] = Field(None, description="Default resolver strategy name")
 
     # Metadata

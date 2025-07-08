@@ -20,7 +20,7 @@ from .models import (
     TestResult,
     DeploymentConfig
 )
-from ..models.moveworks import (
+from models.moveworks import (
     DataType,
     ResolverStrategyCreateRequest,
     ResolverStrategyUpdateRequest,

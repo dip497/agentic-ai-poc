@@ -19,7 +19,54 @@ logger = logging.getLogger(__name__)
 
 class LLMFactory:
     """Factory for creating LLM instances from different providers."""
-    
+
+    # Default configuration - change here to switch providers globally
+    DEFAULT_PROVIDER = "github"
+    DEFAULT_MODEL = "openai/gpt-4.1"
+    DEFAULT_TEMPERATURE = 0.1
+    DEFAULT_MAX_TOKENS = 2000
+    DEFAULT_PROVIDER_CONFIG = {
+        "endpoint": "https://models.github.ai/inference"
+    }
+
+    @staticmethod
+    def get_default_llm(**kwargs) -> BaseChatModel:
+        """
+        Get the default LLM instance with system-wide configuration.
+
+        This is the single place to change LLM provider for the entire system.
+        Override any parameter by passing it as a keyword argument.
+
+        Args:
+            **kwargs: Override any default configuration
+
+        Returns:
+            BaseChatModel instance with default configuration
+        """
+        # Merge default config with any overrides
+        provider = kwargs.get("provider", LLMFactory.DEFAULT_PROVIDER)
+        model = kwargs.get("model", LLMFactory.DEFAULT_MODEL)
+        temperature = kwargs.get("temperature", LLMFactory.DEFAULT_TEMPERATURE)
+        max_tokens = kwargs.get("max_tokens", LLMFactory.DEFAULT_MAX_TOKENS)
+
+        # Merge provider config
+        provider_config = LLMFactory.DEFAULT_PROVIDER_CONFIG.copy()
+        if "provider_config" in kwargs:
+            provider_config.update(kwargs["provider_config"])
+
+        # Remove processed kwargs to avoid conflicts
+        filtered_kwargs = {k: v for k, v in kwargs.items()
+                          if k not in ["provider", "model", "temperature", "max_tokens", "provider_config"]}
+
+        return LLMFactory.create_llm(
+            provider=provider,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            **provider_config,
+            **filtered_kwargs
+        )
+
     @staticmethod
     def create_llm(
         provider: str = "openai",
@@ -45,6 +92,8 @@ class LLMFactory:
         
         if provider == "openai":
             return LLMFactory._create_openai_llm(model, temperature, max_tokens, **kwargs)
+        elif provider == "github":
+            return LLMFactory._create_github_llm(model, temperature, max_tokens, **kwargs)
         elif provider == "gemini":
             return LLMFactory._create_gemini_llm(model, temperature, max_tokens, **kwargs)
         elif provider == "openrouter":
@@ -75,7 +124,31 @@ class LLMFactory:
             )
         except ImportError:
             raise ImportError("langchain-openai not installed. Run: pip install langchain-openai")
-    
+
+    @staticmethod
+    def _create_github_llm(model: str, temperature: float, max_tokens: int, **kwargs) -> BaseChatModel:
+        """Create GitHub AI LLM instance."""
+        try:
+            from langchain_openai import ChatOpenAI
+
+            api_key = kwargs.get("api_key") or os.getenv("GITHUB_API_KEY")
+            endpoint = kwargs.get("endpoint") or os.getenv("GITHUB_API_ENDPOINT", "https://models.github.ai/inference")
+
+            if not api_key:
+                raise ValueError("GitHub API key not found. Set GITHUB_API_KEY environment variable.")
+
+            # GitHub AI uses OpenAI-compatible API
+            return ChatOpenAI(
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                api_key=api_key,
+                base_url=endpoint,
+                **{k: v for k, v in kwargs.items() if k not in ["api_key", "endpoint"]}
+            )
+        except ImportError:
+            raise ImportError("langchain-openai not installed. Run: pip install langchain-openai")
+
     @staticmethod
     def _create_gemini_llm(model: str, temperature: float, max_tokens: int, **kwargs) -> BaseChatModel:
         """Create Google Gemini LLM instance."""
@@ -192,6 +265,12 @@ class LLMFactory:
                 "env_var": "OPENAI_API_KEY",
                 "install": "pip install langchain-openai"
             },
+            "github": {
+                "name": "GitHub AI",
+                "models": ["openai/gpt-4.1", "openai/gpt-4o", "openai/gpt-4o-mini", "anthropic/claude-3.5-sonnet"],
+                "env_var": "GITHUB_API_KEY",
+                "install": "pip install langchain-openai"
+            },
             "gemini": {
                 "name": "Google Gemini",
                 "models": ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-1.0-pro"],
@@ -255,6 +334,8 @@ class LLMFactory:
             env_var = provider_info["env_var"]
             if provider == "openrouter":
                 api_key = os.getenv("OPENROUTER_API_KEY")
+            elif provider == "github":
+                api_key = os.getenv("GITHUB_API_KEY")
             elif provider == "gemini":
                 api_key = os.getenv("GOOGLE_API_KEY")
             elif provider == "anthropic":
@@ -269,6 +350,46 @@ class LLMFactory:
                 }
         
         return {"available": True, "provider_info": provider_info}
+
+    @staticmethod
+    def get_reasoning_llm(**kwargs) -> BaseChatModel:
+        """
+        Get LLM optimized for reasoning tasks.
+        Uses default configuration but can be overridden.
+        """
+        defaults = {
+            "temperature": 0.1,  # Lower temperature for more consistent reasoning
+            "max_tokens": 2000   # Higher token limit for complex reasoning
+        }
+        defaults.update(kwargs)
+        return LLMFactory.get_default_llm(**defaults)
+
+    @staticmethod
+    def get_fast_llm(**kwargs) -> BaseChatModel:
+        """
+        Get LLM optimized for fast responses.
+        Uses lighter model and lower token limits.
+        """
+        defaults = {
+            "model": "openai/gpt-4o-mini" if LLMFactory.DEFAULT_PROVIDER == "github" else "gpt-4o-mini",
+            "temperature": 0.2,
+            "max_tokens": 1000
+        }
+        defaults.update(kwargs)
+        return LLMFactory.get_default_llm(**defaults)
+
+    @staticmethod
+    def get_creative_llm(**kwargs) -> BaseChatModel:
+        """
+        Get LLM optimized for creative tasks.
+        Uses higher temperature for more varied responses.
+        """
+        defaults = {
+            "temperature": 0.7,  # Higher temperature for creativity
+            "max_tokens": 2000
+        }
+        defaults.update(kwargs)
+        return LLMFactory.get_default_llm(**defaults)
 
 
 def create_llm_from_config(config: Dict[str, Any]) -> BaseChatModel:
@@ -305,6 +426,15 @@ EXAMPLE_CONFIGS = {
         "model": "gpt-4o-mini",
         "temperature": 0.1,
         "max_tokens": 2000
+    },
+    "github": {
+        "provider": "github",
+        "model": "openai/gpt-4.1",
+        "temperature": 0.1,
+        "max_tokens": 2000,
+        "provider_config": {
+            "endpoint": "https://models.github.ai/inference"
+        }
     },
     "gemini": {
         "provider": "gemini",

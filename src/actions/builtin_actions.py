@@ -92,9 +92,9 @@ class MoveworksBuiltinActions:
                     ("human", input_data.user_input)
                 ])
             
-            # Create chain with specified model
-            llm = ChatOpenAI(
-                model=input_data.model,
+            # Create chain with centralized LLM configuration
+            from llm.llm_factory import LLMFactory
+            llm = LLMFactory.get_default_llm(
                 temperature=0.1,
                 max_tokens=2000
             )
@@ -160,9 +160,8 @@ Return only valid JSON that matches the schema exactly."""
                 ("human", f"Payload to analyze: {json.dumps(input_data.payload, indent=2)}")
             ])
             
-            # Create chain
-            llm = ChatOpenAI(
-                model=input_data.model,
+            # Create chain with centralized LLM configuration
+            llm = LLMFactory.get_default_llm(
                 temperature=0.1,
                 max_tokens=2000
             )

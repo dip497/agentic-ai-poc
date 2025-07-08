@@ -61,19 +61,11 @@ class DynamicResolverExecutionEngine:
     def __init__(self, llm=None):
         """Initialize the resolver execution engine."""
         if llm is None:
-            # Use LLM factory to create Gemini instance
-            import os
+            # Use centralized LLM configuration
             from .llm_factory import LLMFactory
 
-            # Set the API key
-            os.environ["GOOGLE_API_KEY"] = "AIzaSyC9vwixXT9XdbFzCfFapNR21wYA5ma7LDg"
-
-            self.llm = LLMFactory.create_llm(
-                provider="gemini",
-                model="gemini-1.5-flash",
-                temperature=0.1,
-                max_tokens=1000
-            )
+            # Use fast LLM for resolver execution (optimized for quick responses)
+            self.llm = LLMFactory.get_fast_llm(max_tokens=1000)
         else:
             self.llm = llm
 

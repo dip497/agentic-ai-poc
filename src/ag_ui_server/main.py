@@ -21,14 +21,43 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depe
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from contextlib import asynccontextmanager
 
-from ..reasoning.moveworks_reasoning_engine import MoveworksThreeLoopEngine, create_moveworks_reasoning_engine
-from ..agent_studio.api import create_agent_studio_router
-from ..agent_studio.database import agent_studio_db
-from ..agent_studio.langgraph_integration import agent_studio_integration
+from reasoning.moveworks_reasoning_engine import MoveworksThreeLoopEngine, create_moveworks_reasoning_engine
+from agent_studio.api import create_agent_studio_router
+from agent_studio.database import agent_studio_db
+from agent_studio.langgraph_integration import agent_studio_integration
 
 
 logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for startup and shutdown events."""
+    # Startup
+    logger.info("🚀 Starting Moveworks AI Platform...")
+    try:
+        await server.initialize()
+        # Initialize Agent Studio LangGraph integration
+        try:
+            await agent_studio_integration.initialize()
+            logger.info("✅ Agent Studio LangGraph integration initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize Agent Studio LangGraph integration: {e}")
+
+        logger.info("✅ Server initialization complete")
+    except Exception as e:
+        logger.error(f"❌ Failed to start server: {e}")
+        raise
+
+    yield
+
+    # Shutdown
+    logger.info("🔄 Shutting down server...")
+    if hasattr(server, 'shutdown'):
+        await server.shutdown()
+    logger.info("✅ Server shutdown complete")
 
 
 # Pydantic models for API
@@ -89,7 +118,7 @@ class ConnectionManager:
         websocket = self.active_connections.get(connection_id)
         if websocket:
             try:
-                await websocket.send_text(event.json())
+                await websocket.send_text(event.model_dump_json())
             except Exception as e:
                 logger.error(f"Error sending event to {connection_id}: {e}")
                 self.disconnect(connection_id)
@@ -828,8 +857,13 @@ async def startup_event():
         logger.error(f"Server initialization failed: {e}")
         raise
 
-# Create the app instance for uvicorn
-app = server.app
+# Create the main FastAPI app with lifespan
+app = FastAPI(
+    title="Moveworks AI Platform",
+    version="1.0.0",
+    description="Moveworks-style Agentic Reasoning Engine",
+    lifespan=lifespan
+)
 
 # Main execution block
 if __name__ == "__main__":
@@ -864,27 +898,17 @@ server = AGUIServer()
 
 
 # FastAPI app instance for uvicorn
-app = server.app
+# Add CORS middleware to main app
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-
-# Startup and shutdown events
-@app.on_event("startup")
-async def startup_event():
-    """Initialize server on startup."""
-    try:
-        await server.initialize()
-        # Initialize Agent Studio LangGraph integration
-        await agent_studio_integration.initialize()
-        logger.info("Agent Studio LangGraph integration initialized")
-    except Exception as e:
-        logger.error(f"Failed to start server: {e}")
-        raise
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup on shutdown."""
-    await server.shutdown()
+# Include the server routes
+app.mount("/", server.app)
 
 
 if __name__ == "__main__":

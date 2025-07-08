@@ -18,6 +18,7 @@ from .memory_constructs import (
     MemoryType, DomainDefinition, SemanticMemoryEntry, EpisodicMemoryEntry,
     ConversationContext, ProcedureMemoryEntry, WorkingMemoryEntry, MemorySnapshot
 )
+from config.reasoning_config import get_reasoning_config
 
 logger = logging.getLogger(__name__)
 
@@ -493,13 +494,22 @@ class MoveworksMemoryManager:
 
     async def get_conversation_context(self, conversation_id: str) -> Optional[ConversationContext]:
         """Get conversation context with recent messages."""
+        # Convert conversation_id to UUID if it's not already
+        try:
+            conversation_uuid = uuid.UUID(conversation_id)
+        except ValueError:
+            # If it's not a valid UUID, treat it as a string-based conversation ID
+            # For testing purposes, we'll return None and let the system create a minimal context
+            logger.debug(f"Invalid UUID format for conversation_id: {conversation_id}, returning None")
+            return None
+
         async with self.pool.acquire() as conn:
             # Get conversation metadata
             context_row = await conn.fetchrow("""
                 SELECT conversation_id, user_id, domain, route, persistent_slots, active_plugins, created_at, last_updated
                 FROM conversation_contexts
                 WHERE conversation_id = $1
-            """, uuid.UUID(conversation_id))
+            """, conversation_uuid)
 
             if not context_row:
                 return None
@@ -512,7 +522,7 @@ class MoveworksMemoryManager:
                 WHERE conversation_id = $1
                 ORDER BY sequence_number DESC
                 LIMIT 20
-            """, uuid.UUID(conversation_id))
+            """, conversation_uuid)
 
             # Build conversation context
             messages = []
@@ -578,12 +588,13 @@ class MoveworksMemoryManager:
                     message.sequence_number
                 )
 
-                # Maintain window size (keep last 20 messages)
-                await conn.execute("""
+                # Maintain window size (keep last N messages - configurable)
+                config = get_reasoning_config()
+                await conn.execute(f"""
                     DELETE FROM episodic_memory
                     WHERE conversation_id = $1
                     AND sequence_number < (
-                        SELECT MAX(sequence_number) - 19
+                        SELECT MAX(sequence_number) - {config.memory_window_size - 1}
                         FROM episodic_memory
                         WHERE conversation_id = $1
                     )
