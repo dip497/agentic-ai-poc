@@ -13,6 +13,7 @@ import os
 from typing import Optional, Dict, Any, Union
 import logging
 from langchain_core.language_models import BaseChatModel
+from langchain_core.embeddings import Embeddings
 
 logger = logging.getLogger(__name__)
 
@@ -21,13 +22,11 @@ class LLMFactory:
     """Factory for creating LLM instances from different providers."""
 
     # Default configuration - change here to switch providers globally
-    DEFAULT_PROVIDER = "github"
-    DEFAULT_MODEL = "openai/gpt-4.1"
+    DEFAULT_PROVIDER = "together"
+    DEFAULT_MODEL = "mistralai/Mixtral-8x7B-Instruct-v0.1"
     DEFAULT_TEMPERATURE = 0.1
     DEFAULT_MAX_TOKENS = 2000
-    DEFAULT_PROVIDER_CONFIG = {
-        "endpoint": "https://models.github.ai/inference"
-    }
+    DEFAULT_PROVIDER_CONFIG = {}
 
     @staticmethod
     def get_default_llm(**kwargs) -> BaseChatModel:
@@ -79,7 +78,7 @@ class LLMFactory:
         Create an LLM instance based on the provider.
         
         Args:
-            provider: LLM provider ("openai", "gemini", "openrouter", "anthropic", "ollama")
+            provider: LLM provider ("openai", "together", "gemini", "openrouter", "anthropic", "ollama")
             model: Model name
             temperature: Temperature for generation
             max_tokens: Maximum tokens
@@ -92,6 +91,8 @@ class LLMFactory:
         
         if provider == "openai":
             return LLMFactory._create_openai_llm(model, temperature, max_tokens, **kwargs)
+        elif provider == "together":
+            return LLMFactory._create_together_llm(model, temperature, max_tokens, **kwargs)
         elif provider == "github":
             return LLMFactory._create_github_llm(model, temperature, max_tokens, **kwargs)
         elif provider == "gemini":
@@ -124,6 +125,26 @@ class LLMFactory:
             )
         except ImportError:
             raise ImportError("langchain-openai not installed. Run: pip install langchain-openai")
+
+    @staticmethod
+    def _create_together_llm(model: str, temperature: float, max_tokens: int, **kwargs) -> BaseChatModel:
+        """Create Together.ai LLM instance."""
+        try:
+            from langchain_together import ChatTogether
+
+            api_key = kwargs.get("api_key") or os.getenv("TOGETHER_API_KEY")
+            if not api_key:
+                raise ValueError("Together.ai API key not found. Set TOGETHER_API_KEY environment variable.")
+
+            return ChatTogether(
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                together_api_key=api_key,
+                **{k: v for k, v in kwargs.items() if k not in ["api_key"]}
+            )
+        except ImportError:
+            raise ImportError("langchain-together not installed. Run: pip install langchain-together")
 
     @staticmethod
     def _create_github_llm(model: str, temperature: float, max_tokens: int, **kwargs) -> BaseChatModel:
@@ -245,13 +266,7 @@ class LLMFactory:
                     **{k: v for k, v in kwargs.items() if k != "base_url"}
                 )
             except ImportError:
-                # Fallback to regular Ollama
-                return Ollama(
-                    model=model,
-                    temperature=temperature,
-                    base_url=base_url,
-                    **{k: v for k, v in kwargs.items() if k != "base_url"}
-                )
+                raise ImportError("ChatOllama not available. Install with: pip install langchain-community")
         except ImportError:
             raise ImportError("langchain-community not installed. Run: pip install langchain-community")
     
@@ -264,6 +279,20 @@ class LLMFactory:
                 "models": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
                 "env_var": "OPENAI_API_KEY",
                 "install": "pip install langchain-openai"
+            },
+            "together": {
+                "name": "Together.ai",
+                "models": [
+                    "mistralai/Mixtral-8x7B-Instruct-v0.1",
+                    "mistralai/Mistral-7B-Instruct-v0.1",
+                    "NousResearch/Nous-Hermes-2-Mixtral-8x7B-DPO",
+                    "teknium/OpenHermes-2.5-Mistral-7B",
+                    "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free",
+                    "meta-llama/Llama-3.1-8B-Instruct-Turbo",
+                    "meta-llama/Llama-3.1-70B-Instruct-Turbo"
+                ],
+                "env_var": "TOGETHER_API_KEY",
+                "install": "pip install langchain-together"
             },
             "github": {
                 "name": "GitHub AI",
@@ -317,6 +346,8 @@ class LLMFactory:
         try:
             if provider == "openai":
                 import langchain_openai
+            elif provider == "together":
+                import langchain_together
             elif provider == "gemini":
                 import langchain_google_genai
             elif provider == "anthropic":
@@ -336,6 +367,8 @@ class LLMFactory:
                 api_key = os.getenv("OPENROUTER_API_KEY")
             elif provider == "github":
                 api_key = os.getenv("GITHUB_API_KEY")
+            elif provider == "together":
+                api_key = os.getenv("TOGETHER_API_KEY")
             elif provider == "gemini":
                 api_key = os.getenv("GOOGLE_API_KEY")
             elif provider == "anthropic":
@@ -371,7 +404,7 @@ class LLMFactory:
         Uses lighter model and lower token limits.
         """
         defaults = {
-            "model": "openai/gpt-4o-mini" if LLMFactory.DEFAULT_PROVIDER == "github" else "gpt-4o-mini",
+            "model": "mistralai/Mistral-7B-Instruct-v0.1" if LLMFactory.DEFAULT_PROVIDER == "together" else "gpt-4o-mini",
             "temperature": 0.2,
             "max_tokens": 1000
         }
@@ -390,6 +423,62 @@ class LLMFactory:
         }
         defaults.update(kwargs)
         return LLMFactory.get_default_llm(**defaults)
+
+    @staticmethod
+    def get_embedding_model(**kwargs) -> Embeddings:
+        """
+        Get embedding model for vector operations.
+
+        Returns an embedding model suitable for similarity search and vector operations.
+        """
+        provider = kwargs.get("provider", "openai")
+
+        if provider == "openai":
+            try:
+                from langchain_openai import OpenAIEmbeddings
+
+                api_key = kwargs.get("api_key") or os.getenv("OPENAI_API_KEY")
+                if not api_key:
+                    raise ValueError("OpenAI API key not found. Set OPENAI_API_KEY environment variable.")
+
+                return OpenAIEmbeddings(
+                    model=kwargs.get("model", "text-embedding-3-small"),
+                    api_key=api_key
+                )
+            except ImportError:
+                raise ImportError("langchain-openai package required for OpenAI embeddings")
+
+        elif provider == "together":
+            try:
+                from langchain_together import TogetherEmbeddings
+
+                api_key = kwargs.get("api_key") or os.getenv("TOGETHER_API_KEY")
+                if not api_key:
+                    raise ValueError("Together API key not found. Set TOGETHER_API_KEY environment variable.")
+
+                return TogetherEmbeddings(
+                    model=kwargs.get("model", "togethercomputer/m2-bert-80M-8k-retrieval"),
+                    together_api_key=api_key
+                )
+            except ImportError:
+                raise ImportError("langchain-together package required for Together embeddings")
+
+        elif provider == "ollama":
+            try:
+                from langchain_ollama import OllamaEmbeddings
+
+                base_url = kwargs.get("base_url") or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+                model = kwargs.get("model", "nomic-embed-text")
+
+                return OllamaEmbeddings(
+                    model=model,
+                    base_url=base_url
+                )
+            except ImportError:
+                raise ImportError("langchain-ollama package required for Ollama embeddings")
+
+        else:
+            raise ValueError(f"Unsupported embedding provider: {provider}")
 
 
 def create_llm_from_config(config: Dict[str, Any]) -> BaseChatModel:
@@ -424,6 +513,12 @@ EXAMPLE_CONFIGS = {
     "openai": {
         "provider": "openai",
         "model": "gpt-4o-mini",
+        "temperature": 0.1,
+        "max_tokens": 2000
+    },
+    "together": {
+        "provider": "together",
+        "model": "mistralai/Mixtral-8x7B-Instruct-v0.1",
         "temperature": 0.1,
         "max_tokens": 2000
     },

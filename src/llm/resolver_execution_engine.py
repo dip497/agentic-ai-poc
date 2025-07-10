@@ -23,12 +23,12 @@ from typing import Dict, Any, Optional, List, Union
 from pydantic import BaseModel, Field
 from langchain_core.prompts import ChatPromptTemplate
 
-from ..models.moveworks import (
+from src.models.moveworks import (
     Slot, ResolverStrategy, ResolverMethod, ResolverMethodType,
     ConversationContext, SlotInferenceResult
 )
-from ..agent_studio.database import agent_studio_db
-from ..orchestration.activity_orchestrator import MoveworksActivityOrchestrator
+from src.agent_studio.database import agent_studio_db
+from src.orchestration.activity_orchestrator import MoveworksActivityOrchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -378,43 +378,58 @@ Select the best method to resolve the user's request.""")
         return input_args
 
     async def _execute_action(self, action_name: str, input_args: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute an action through the activity orchestrator."""
+        """Execute an action through configured connectors."""
         try:
-            # Use the activity orchestrator to execute actions
-            # This will look up the action in the database and execute it through the proper connector
+            # Use the global connector manager to execute actions
+            from src.connectors.base_connector import connector_manager
 
-            # For now, since we don't have the actions configured in the database yet,
-            # we'll provide a mock response that simulates what the real action would return
+            # Ensure connectors are loaded from database
+            if not connector_manager.connectors:
+                await connector_manager.load_connectors_from_database()
 
-            # This is temporary until we configure the mock server actions in the database
-            if 'jira' in action_name.lower():
-                return {
-                    'success': True,
-                    'data': {
-                        'issues': [
-                            {
-                                'id': 'BUG-732',
-                                'title': 'Login authentication failure',
-                                'status': 'Open',
-                                'assignee': input_args.get('user_id', 'test_user_123')
-                            },
-                            {
-                                'id': 'BUG-733',
-                                'title': 'Password reset not working',
-                                'status': 'In Progress',
-                                'assignee': input_args.get('user_id', 'test_user_123')
-                            }
-                        ]
+            # Try to find the action in any of the configured connectors
+            for connector_name, connector in connector_manager.connectors.items():
+                if hasattr(connector, 'actions') and action_name in connector.actions:
+                    logger.info(f"Executing action '{action_name}' using connector '{connector_name}'")
+                    result = await connector.execute_action(action_name, input_args)
+                    return {
+                        'success': result.success,
+                        'data': result.data,
+                        'error': result.error,
+                        'connector_used': connector_name
                     }
-                }
 
-            # Generic success response for other actions
+            # If action not found in any connector, try mock server directly
+            logger.warning(f"Action '{action_name}' not found in any connector, trying mock server")
+
+            if 'jira' in action_name.lower():
+                # Use mock server endpoint directly
+                import aiohttp
+                async with aiohttp.ClientSession() as session:
+                    user_id = input_args.get('user_id', 'test_user_123')
+                    url = f'http://localhost:8001/jira/users/{user_id}/issues'
+                    logger.info(f"Making direct request to mock server: {url}")
+
+                    try:
+                        async with session.get(url) as response:
+                            if response.status == 200:
+                                data = await response.json()
+                                return {'success': True, 'data': data, 'connector_used': 'mock_server_direct'}
+                            else:
+                                error_text = await response.text()
+                                return {'success': False, 'error': f'Mock server error {response.status}: {error_text}'}
+                    except Exception as e:
+                        return {'success': False, 'error': f'Mock server connection failed: {str(e)}'}
+
+            # Generic fallback
             return {
                 'success': True,
                 'data': {
-                    'message': f'Action {action_name} executed successfully',
-                    'input_args': input_args
-                }
+                    'message': f'Action {action_name} executed successfully (fallback)',
+                    'input_args': input_args,
+                    'available_connectors': list(connector_manager.connectors.keys())
+                },
+                'connector_used': 'fallback'
             }
 
         except Exception as e:
@@ -456,14 +471,13 @@ Select the best method to resolve the user's request.""")
                 execution_trace.append(f"Using single object: {item_id}")
                 return f"<{data_type_name}>_{item_id}"
 
-            # Fallback
-            execution_trace.append("Using fallback ID generation")
-            return f"<{data_type_name}>_resolved"
+            # No valid data structure found
+            raise ValueError(f"Invalid data structure for {data_type_name}: {mapped_data}")
 
         except Exception as e:
             logger.error(f"Error transforming data to type format: {e}")
             execution_trace.append(f"Transformation error: {str(e)}")
-            return f"<{data_type_name}>_error"
+            raise RuntimeError(f"Data transformation failed for {data_type_name}: {e}") from e
 
     def _apply_output_mapping(self, data: Dict[str, Any], mapping: str) -> Any:
         """Apply output mapping to extract specific data from response."""

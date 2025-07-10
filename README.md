@@ -363,7 +363,7 @@ The system provides real-time statistics:
 
 - **LLM Costs**: Monitor token usage for cost optimization
 - **Latency**: Consider caching for frequently matched processes
-- **Reliability**: Implement fallbacks for LLM failures
+- **Reliability**: Ensure robust error handling and proper failure modes
 - **Security**: Validate all LLM outputs before execution
 - **Monitoring**: Track conversation success rates and user satisfaction
 

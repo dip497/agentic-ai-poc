@@ -278,44 +278,36 @@ vector_stores:
     collection_name: "meeting_rooms"
     embedding_model: "text-embedding-ada-002"
 
-# LLM Configuration - GitHub AI
+# LLM Configuration - Together.ai
 llm:
   # Default LLM configuration
   default:
-    provider: "github"
-    model: "openai/gpt-4.1"
+    provider: "together"
+    model: "mistralai/Mixtral-8x7B-Instruct-v0.1"
     temperature: 0.1
     max_tokens: 2000
-    provider_config:
-      endpoint: "https://models.github.ai/inference"
 
   # Process matching LLM
   process_matching:
-    provider: "github"
-    model: "openai/gpt-4.1"
+    provider: "together"
+    model: "mistralai/Mistral-7B-Instruct-v0.1"
     temperature: 0.1
     max_tokens: 1000
     min_confidence: 0.6
-    provider_config:
-      endpoint: "https://models.github.ai/inference"
 
   # Slot inference LLM
   slot_inference:
-    provider: "github"
-    model: "openai/gpt-4.1"
+    provider: "together"
+    model: "mistralai/Mistral-7B-Instruct-v0.1"
     temperature: 0.1
     max_tokens: 1000
-    provider_config:
-      endpoint: "https://models.github.ai/inference"
 
   # Built-in actions LLM
   builtin_actions:
-    provider: "github"
-    model: "openai/gpt-4.1"
+    provider: "together"
+    model: "mistralai/Mixtral-8x7B-Instruct-v0.1"
     temperature: 0.1
     max_tokens: 2000
-    provider_config:
-      endpoint: "https://models.github.ai/inference"
 
 # Alternative LLM Configurations (uncomment to use)
 # llm:

@@ -17,7 +17,7 @@ export default function Home() {
 
   useEffect(() => {
     // Initialize AG-UI client
-    const aguiClient = new AGUIClient('ws://localhost:8000')
+    const aguiClient = new AGUIClient('ws://localhost:8081')
     
     aguiClient.onConnect = () => {
       setIsConnected(true)
@@ -54,7 +54,7 @@ export default function Home() {
 
   const fetchSystemStatus = async () => {
     try {
-      const response = await fetch('http://localhost:8000/api/system/status')
+      const response = await fetch('http://localhost:8081/api/system/status')
       const status = await response.json()
       setSystemStatus(status)
     } catch (error) {

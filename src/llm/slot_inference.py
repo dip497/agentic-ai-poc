@@ -384,7 +384,7 @@ Return the raw_value of the best matching option, or "NO_MATCH" if no good match
         
         except Exception as e:
             logger.error(f"Error in static option matching: {e}")
-            return None
+            raise RuntimeError(f"Static option matching failed: {e}") from e
 
 
 # Example usage and testing

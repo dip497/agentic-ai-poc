@@ -78,17 +78,28 @@ def request_slot_clarification(
 ) -> str:
     """
     Request clarification for a slot value from the user.
-    
-    This tool pauses execution to get clarification on slot values
-    that are missing or ambiguous.
-    
+
+    ⚠️  CRITICAL: This should ONLY be used for disambiguation, NOT data collection!
+
+    PROPER USAGE (Disambiguation):
+    - "I found 3 John Smiths. Which one did you mean?"
+    - "Did you mean Project Alpha or Project Beta?"
+    - "Should I book the 2pm or 3pm meeting?"
+
+    IMPROPER USAGE (Data Collection - Use AI inference instead):
+    - "What's your name?" → AI should infer from conversation context
+    - "How many days?" → AI should extract from "I need 5 days off"
+    - "What type of PTO?" → AI should infer from "vacation time"
+
+    The AI should try context inference FIRST before using this tool.
+
     Args:
         slot_name: Name of the slot requiring clarification
         clarification_message: Message to display to the user
         options: Optional list of predefined options
         slot_type: Type of slot (text, number, date, etc.)
         required: Whether the slot is required
-    
+
     Returns:
         Clarified slot value from user
     """

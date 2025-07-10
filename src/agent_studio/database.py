@@ -12,25 +12,29 @@ from datetime import datetime
 import uuid
 import logging
 
+# Note: Embedding functionality should use the existing vector store system
+# in src/vector_store/plugin_similarity_search.py
+
 logger = logging.getLogger(__name__)
 
 
 class AgentStudioDatabase:
-    """PostgreSQL database manager for Agent Studio."""
-    
+    """PostgreSQL database manager for Agent Studio with embedding-based process detection."""
+
     def __init__(self):
         self.pool: Optional[asyncpg.Pool] = None
         self.database_url = os.getenv(
             "DATABASE_URL",
             "postgresql://postgres:postgres@localhost:5432/agent_studio"
         )
+        # Note: Process detection should use the existing Moveworks reasoning engine
     
     async def initialize(self):
-        """Initialize database connection and create tables."""
+        """Initialize database connection, create tables, and set up embeddings."""
         try:
             # Create database if it doesn't exist
             await self._create_database_if_not_exists()
-            
+
             # Create connection pool
             self.pool = await asyncpg.create_pool(
                 self.database_url,
@@ -41,10 +45,10 @@ class AgentStudioDatabase:
             
             # Create tables
             await self._create_tables()
-            
+
             # Insert sample data
             await self._insert_sample_data()
-            
+
             logger.info("Agent Studio database initialized successfully")
             
         except Exception as e:
@@ -131,6 +135,54 @@ class AgentStudioDatabase:
                 )
             """)
             
+            # Slots table
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS slots (
+                    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                    name VARCHAR(255) NOT NULL,
+                    data_type VARCHAR(50) NOT NULL,
+                    description TEXT,
+                    inference_policy VARCHAR(50) DEFAULT 'infer',
+                    validation_policy TEXT,
+                    validation_description TEXT,
+                    resolver_strategy JSONB DEFAULT '{}',
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+
+            # Actions table
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS actions (
+                    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                    name VARCHAR(255) NOT NULL,
+                    type VARCHAR(50) NOT NULL,
+                    description TEXT,
+                    config JSONB DEFAULT '{}',
+                    input_schema JSONB DEFAULT '{}',
+                    output_schema JSONB DEFAULT '{}',
+                    connector_id UUID REFERENCES connectors(id) ON DELETE SET NULL,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+
+            # Activities table
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS activities (
+                    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                    name VARCHAR(255) NOT NULL,
+                    type VARCHAR(50) NOT NULL,
+                    config JSONB DEFAULT '{}',
+                    input_mapping JSONB DEFAULT '{}',
+                    output_mapping JSONB DEFAULT '{}',
+                    confirmation_policy VARCHAR(50),
+                    required_slots JSONB DEFAULT '[]',
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+
             # Deployments table
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS deployments (
@@ -141,6 +193,7 @@ class AgentStudioDatabase:
                     priority INTEGER DEFAULT 1,
                     user_groups JSONB DEFAULT '[]',
                     rate_limit INTEGER,
+                    rollback_plan TEXT,
                     deployed_at TIMESTAMP DEFAULT NOW(),
                     deployed_by VARCHAR(255)
                 )
@@ -212,12 +265,48 @@ class AgentStudioDatabase:
             connector_count = await conn.fetchval("SELECT COUNT(*) FROM connectors")
             
             if process_count == 0 and connector_count == 0:
-                # Insert sample connector
+                # Insert mock server connector for testing
+                mock_connector_id = await conn.fetchval("""
+                    INSERT INTO connectors (name, description, type, base_url, auth_type, available_actions)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    RETURNING id
+                """,
+                    "Mock Server",
+                    "Mock external APIs for testing dynamic resolvers",
+                    "http",
+                    "http://localhost:8001",
+                    "none",
+                    json.dumps([
+                        {
+                            "name": "get_jira_user_issues",
+                            "description": "Get Jira issues assigned to a user",
+                            "endpoint": "/jira/users/{user_id}/issues",
+                            "method": "GET",
+                            "params": {}
+                        },
+                        {
+                            "name": "get_jira_issue",
+                            "description": "Get specific Jira issue by ID",
+                            "endpoint": "/jira/issues/{issue_id}",
+                            "method": "GET",
+                            "params": {}
+                        },
+                        {
+                            "name": "get_servicenow_incidents",
+                            "description": "Get ServiceNow incidents",
+                            "endpoint": "/servicenow/incidents",
+                            "method": "GET",
+                            "params": {}
+                        }
+                    ])
+                )
+
+                # Insert sample REST API connector
                 connector_id = await conn.fetchval("""
                     INSERT INTO connectors (name, description, type, base_url, auth_type, available_actions)
                     VALUES ($1, $2, $3, $4, $5, $6)
                     RETURNING id
-                """, 
+                """,
                     "Sample REST API",
                     "Sample REST API connector for testing",
                     "http",
@@ -240,8 +329,182 @@ class AgentStudioDatabase:
                         }
                     ])
                 )
-                
-                # Insert sample process
+
+                # Insert mock server actions
+                await conn.execute("""
+                    INSERT INTO actions (name, type, description, config, input_schema, output_schema, connector_id)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                """,
+                    "get_jira_user_issues",
+                    "http",
+                    "Get Jira issues assigned to a user from mock server",
+                    json.dumps({
+                        "method": "GET",
+                        "endpoint": "/jira/users/{user_id}/issues",
+                        "timeout": 30
+                    }),
+                    json.dumps({
+                        "type": "object",
+                        "properties": {
+                            "user_id": {"type": "string", "description": "User ID to get issues for"}
+                        },
+                        "required": ["user_id"]
+                    }),
+                    json.dumps({
+                        "type": "object",
+                        "properties": {
+                            "issues": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "id": {"type": "string"},
+                                        "title": {"type": "string"},
+                                        "status": {"type": "string"}
+                                    }
+                                }
+                            }
+                        }
+                    }),
+                    mock_connector_id
+                )
+
+                # Insert sample actions
+                await conn.execute("""
+                    INSERT INTO actions (name, type, description, config, input_schema, output_schema, connector_id)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                """,
+                    "get_pto_balance_action",
+                    "http",
+                    "Retrieve PTO balance from HR system",
+                    json.dumps({
+                        "method": "GET",
+                        "url": "https://hr-api.company.com/api/v1/pto/balance",
+                        "headers": {
+                            "Authorization": "Bearer {{connector.hr_system.auth_token}}",
+                            "Content-Type": "application/json"
+                        },
+                        "query_params": {
+                            "employee_id": "{{employee_id}}",
+                            "pto_type": "{{pto_type}}"
+                        },
+                        "timeout": 30,
+                        "retry_policy": {
+                            "max_retries": 3,
+                            "retry_delay": 1000
+                        }
+                    }),
+                    json.dumps({
+                        "type": "object",
+                        "properties": {
+                            "employee_id": {"type": "string", "description": "Employee ID"},
+                            "pto_type": {"type": "string", "enum": ["vacation", "sick", "personal"], "description": "Type of PTO"}
+                        },
+                        "required": ["employee_id", "pto_type"]
+                    }),
+                    json.dumps({
+                        "type": "object",
+                        "properties": {
+                            "available_days": {"type": "number"},
+                            "total_days": {"type": "number"},
+                            "balance_type": {"type": "string"},
+                            "last_updated": {"type": "string", "format": "date-time"}
+                        }
+                    }),
+                    connector_id
+                )
+
+                await conn.execute("""
+                    INSERT INTO actions (name, type, description, config, input_schema, output_schema)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                """,
+                    "generate_text_action",
+                    "builtin",
+                    "Generate text using AI",
+                    json.dumps({
+                        "model": "gpt-4",
+                        "max_tokens": 500,
+                        "temperature": 0.7,
+                        "system_prompt": "You are a helpful assistant that generates professional responses.",
+                        "user_prompt": "{{prompt}}"
+                    }),
+                    json.dumps({
+                        "type": "object",
+                        "properties": {
+                            "prompt": {"type": "string", "description": "Text generation prompt"}
+                        },
+                        "required": ["prompt"]
+                    }),
+                    json.dumps({
+                        "type": "object",
+                        "properties": {
+                            "generated_text": {"type": "string"},
+                            "token_count": {"type": "number"},
+                            "model_used": {"type": "string"}
+                        }
+                    })
+                )
+
+                # Insert sample processes
+
+                # PTO Request Process
+                await conn.execute("""
+                    INSERT INTO conversational_processes (
+                        name, description, triggers, keywords, activities, slots, required_connectors, permissions
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                """,
+                    "PTO Request",
+                    "Submit a paid time off request",
+                    json.dumps(["I need time off", "submit PTO request", "request vacation", "sick leave", "time off tomorrow"]),
+                    json.dumps(["pto", "time off", "vacation", "sick", "leave", "holiday"]),
+                    json.dumps([
+                        {
+                            "name": "collect_pto_type",
+                            "description": "Collect the type of PTO",
+                            "type": "slot_collection",
+                            "slot_name": "pto_type"
+                        },
+                        {
+                            "name": "collect_dates",
+                            "description": "Collect start and end dates",
+                            "type": "slot_collection",
+                            "slot_name": "start_date"
+                        },
+                        {
+                            "name": "submit_pto",
+                            "description": "Submit the PTO request",
+                            "type": "http_action",
+                            "connector_name": "HR System",
+                            "endpoint": "/pto/requests",
+                            "method": "POST",
+                            "parameters": {"pto_type": "{pto_type}", "start_date": "{start_date}", "duration_days": "{duration_days}"}
+                        }
+                    ]),
+                    json.dumps([
+                        {
+                            "name": "pto_type",
+                            "data_type": "string",
+                            "description": "Type of PTO (vacation, sick, personal)",
+                            "is_required": True
+                        },
+                        {
+                            "name": "start_date",
+                            "data_type": "string",
+                            "description": "Start date for the PTO request",
+                            "is_required": True
+                        },
+                        {
+                            "name": "duration_days",
+                            "data_type": "integer",
+                            "description": "Number of days for the request",
+                            "is_required": True
+                        }
+                    ]),
+                    json.dumps(["HR System"]),
+                    json.dumps({"all_users": True})
+                )
+
+                # User Lookup Process
                 await conn.execute("""
                     INSERT INTO conversational_processes (
                         name, description, triggers, keywords, activities, slots, required_connectors, permissions
@@ -498,23 +761,138 @@ class AgentStudioDatabase:
 
             return results
     
+    # ========== SLOTS ==========
+
+    async def list_slots(self) -> List[Dict[str, Any]]:
+        """List all slot definitions."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT id::text as id, name, data_type, description,
+                       inference_policy, validation_policy, validation_description,
+                       resolver_strategy, created_at, updated_at
+                FROM slots
+                ORDER BY name
+            """)
+            return [dict(row) for row in rows]
+
+    async def create_slot(self, slot_data: Dict[str, Any]) -> str:
+        """Create a new slot definition."""
+        async with self.pool.acquire() as conn:
+            slot_id = await conn.fetchval("""
+                INSERT INTO slots (
+                    name, data_type, description, inference_policy,
+                    validation_policy, validation_description, resolver_strategy
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+                RETURNING id
+            """,
+                slot_data["name"],
+                slot_data["data_type"],
+                slot_data["description"],
+                slot_data["inference_policy"],
+                slot_data.get("validation_policy"),
+                slot_data.get("validation_description"),
+                json.dumps(slot_data["resolver_strategy"])
+            )
+            return str(slot_id)
+
+    # ========== ACTIONS ==========
+
+    async def list_actions(self) -> List[Dict[str, Any]]:
+        """List all action definitions."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT id::text as id, name, type, description, config,
+                       input_schema, output_schema, connector_id,
+                       created_at, updated_at
+                FROM actions
+                ORDER BY created_at DESC
+            """)
+            return [dict(row) for row in rows]
+
+    async def create_action(self, action_data: Dict[str, Any]) -> str:
+        """Create a new action definition."""
+        async with self.pool.acquire() as conn:
+            action_id = await conn.fetchval(
+                """
+                INSERT INTO actions (name, type, description, config, input_schema, output_schema, connector_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                RETURNING id
+                """,
+                action_data["name"],
+                action_data["type"],
+                action_data["description"],
+                json.dumps(action_data["config"]),
+                json.dumps(action_data.get("input_schema")),
+                json.dumps(action_data.get("output_schema")),
+                action_data.get("connector_id")
+            )
+            return str(action_id)
+
+    # ========== ACTIVITIES ==========
+
+    async def list_activities(self) -> List[Dict[str, Any]]:
+        """List all activity definitions."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT id::text as id, name, type, config,
+                       input_mapping, output_mapping, confirmation_policy,
+                       required_slots, created_at, updated_at
+                FROM activities
+                ORDER BY name
+            """)
+            return [dict(row) for row in rows]
+
+    async def create_activity(self, activity_data: Dict[str, Any]) -> str:
+        """Create a new activity definition."""
+        async with self.pool.acquire() as conn:
+            activity_id = await conn.fetchval("""
+                INSERT INTO activities (
+                    name, type, config, input_mapping, output_mapping,
+                    confirmation_policy, required_slots
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+                RETURNING id
+            """,
+                activity_data["name"],
+                activity_data["type"],
+                json.dumps(activity_data["config"]),
+                json.dumps(activity_data.get("input_mapping", {})),
+                json.dumps(activity_data.get("output_mapping", {})),
+                activity_data.get("confirmation_policy"),
+                json.dumps(activity_data.get("required_slots", []))
+            )
+            return str(activity_id)
+
     # ========== DEPLOYMENTS ==========
     
-    async def create_deployment(self, deployment_data: Dict[str, Any]) -> bool:
+    async def list_deployments(self) -> List[Dict[str, Any]]:
+        """List all deployments."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT id::text as id, process_id::text as process_id,
+                       environment, enabled, user_groups, rollback_plan,
+                       deployed_at, deployed_by
+                FROM deployments
+                ORDER BY deployed_at DESC
+            """)
+            return [dict(row) for row in rows]
+
+    async def create_deployment(self, deployment_data: Dict[str, Any]) -> str:
         """Create a deployment configuration."""
         async with self.pool.acquire() as conn:
-            await conn.execute("""
+            deployment_id = await conn.fetchval("""
                 INSERT INTO deployments (
-                    process_id, environment, enabled, user_groups, deployed_by
-                ) VALUES ($1, $2, $3, $4, $5)
+                    process_id, environment, enabled, user_groups, rollback_plan, deployed_by
+                ) VALUES ($1, $2, $3, $4, $5, $6)
+                RETURNING id
             """,
                 uuid.UUID(deployment_data["process_id"]),
                 deployment_data["environment"],
                 deployment_data.get("enabled", True),
                 json.dumps(deployment_data.get("user_groups", [])),
+                deployment_data.get("rollback_plan"),
                 deployment_data.get("deployed_by", "system")
             )
-            return True
+            return str(deployment_id)
     
     async def get_deployment(self, process_id: str) -> Optional[Dict[str, Any]]:
         """Get deployment configuration for a process."""

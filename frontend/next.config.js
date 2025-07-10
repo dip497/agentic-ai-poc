@@ -7,15 +7,15 @@ const nextConfig = {
     return [
       {
         source: '/api/ag-ui/:path*',
-        destination: 'http://localhost:8000/:path*',
+        destination: 'http://localhost:8081/:path*',
       },
       {
         source: '/api/agent-studio/:path*',
-        destination: 'http://localhost:8000/api/agent-studio/:path*',
+        destination: 'http://localhost:8081/api/agent-studio/:path*',
       },
       {
         source: '/api/system/:path*',
-        destination: 'http://localhost:8000/api/system/:path*',
+        destination: 'http://localhost:8081/api/system/:path*',
       },
     ];
   },

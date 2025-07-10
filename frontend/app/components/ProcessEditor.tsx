@@ -316,7 +316,7 @@ export default function ProcessEditor({ process, isOpen, onClose, onSave }: Proc
 
     if (!editData.name.trim()) issues.push('Process name is required');
     if (!editData.description.trim()) issues.push('Process description is required');
-    if (editData.triggers.split(',').filter(t => t.trim()).length === 0) {
+    if (editData.triggers.split(',').filter((t: string) => t.trim()).length === 0) {
       issues.push('At least one trigger is required');
     }
     if (editData.slots.length === 0) issues.push('Consider adding slots to collect user input');

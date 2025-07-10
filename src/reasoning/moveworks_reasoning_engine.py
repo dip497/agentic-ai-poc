@@ -4,7 +4,7 @@ Implements the actual Moveworks reasoning loops: Planning, Execution, and User F
 """
 
 import logging
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Literal
 from datetime import datetime
 from dataclasses import dataclass, field
 
@@ -15,10 +15,11 @@ from langgraph.types import interrupt, Command
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from typing import TypedDict, Annotated
 
-from reasoning.plugin_selection_engine import MoveworksPluginSelector
+from .plugin_selection_engine import MoveworksPluginSelector
 from reasoning.multi_plugin_response import MultiPluginResponseEngine
-from reasoning.memory_constructs import MemorySnapshot
-from reasoning.moveworks_memory_manager import MoveworksMemoryManager
+from reasoning.moveworks_slot_memory_manager import moveworks_slot_memory_manager
+from reasoning.moveworks_slot_system import MoveworksSlot, SlotInferencePolicy
+from reasoning.manifest_generator import MoveworksManifestGenerator
 from config.loader import MoveworksConfigLoader
 from config.reasoning_config import get_reasoning_config
 from llm.llm_factory import LLMFactory
@@ -46,6 +47,11 @@ class MoveworksReasoningState(TypedDict):
     # User Feedback Loop State
     user_feedback: Optional[str]
     awaiting_confirmation: bool
+
+    # Slot-based Memory State
+    resolved_slots: Dict[str, Any]
+    pending_slots: List[str]
+    current_process_id: Optional[str]
 
     # Slot Management State
     required_slots: List[str]
@@ -103,13 +109,17 @@ class MoveworksThreeLoopEngine:
         # Initialize plugin selector
         self.plugin_selector = MoveworksPluginSelector(self.config_loader)
         await self.plugin_selector.initialize()
-        
+
+        # Initialize manifest generator
+        self.manifest_generator = MoveworksManifestGenerator(self.plugin_selector)
+        await self.manifest_generator.initialize()
+
         # Initialize multi-plugin engine
         self.multi_plugin_engine = MultiPluginResponseEngine(self.config_loader)
         await self.multi_plugin_engine.initialize()
-        
-        # Initialize memory manager
-        self.memory_manager = MoveworksMemoryManager()
+
+        # Initialize slot-based memory manager
+        self.memory_manager = moveworks_slot_memory_manager
         await self.memory_manager.initialize()
         
         # Build the three-loop reasoning graph
@@ -170,7 +180,7 @@ class MoveworksThreeLoopEngine:
             conversation_id = f"conv_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
         logger.info(f"Processing via Moveworks three-loop reasoning: {user_query[:100]}...")
-        
+
         try:
             # Initialize state
             initial_state = MoveworksReasoningState(
@@ -228,7 +238,9 @@ class MoveworksThreeLoopEngine:
                 execution_summary={"error": str(e)},
                 conversation_id=conversation_id
             )
-    
+
+
+
     async def _load_memory_node(self, state: MoveworksReasoningState) -> MoveworksReasoningState:
         """Load conversation memory."""
         try:
@@ -358,61 +370,166 @@ class MoveworksThreeLoopEngine:
         return state
     
     # Helper methods continue in next part...
-    
+
+    async def _get_available_plugins_context(self) -> str:
+        """Get context about available plugins for planning."""
+        try:
+            # Get plugins from our plugin selector
+            if hasattr(self.plugin_selector, 'get_all_plugins'):
+                plugins = await self.plugin_selector.get_all_plugins()
+                plugin_descriptions = []
+                for plugin in plugins:
+                    plugin_descriptions.append(f"- {plugin.name}: {plugin.description}")
+                return "\n".join(plugin_descriptions)
+            else:
+                # Fallback: basic plugin categories
+                return """- Search Plugin: Search enterprise knowledge base and documents
+- Workflow Plugin: Execute business workflows and processes
+- API Plugin: Make HTTP calls to external systems
+- Form Plugin: Handle form submissions and data collection
+- Approval Plugin: Manage approval workflows
+- Ticket Plugin: Create and manage support tickets"""
+        except Exception as e:
+            logger.error(f"Failed to get plugin context: {e}")
+            raise RuntimeError(f"Plugin context retrieval failed: {e}") from e
+
+    async def _analyze_execution_outcome(self, state: MoveworksReasoningState, execution_result: Dict[str, Any]) -> Dict[str, Any]:
+        """Use agentic reasoning LLM to analyze execution outcome."""
+        try:
+            context = f"""As a Moveworks agentic reasoning LLM, analyze this execution outcome:
+
+User Query: {state['user_query']}
+Execution Step: {execution_result.get('step', 'Unknown')}
+Success: {execution_result['success']}
+Error: {execution_result.get('error', 'None')}
+Response: {execution_result.get('response', 'None')}
+
+Analyze:
+1. What was the outcome of this execution step?
+2. Should we proceed autonomously or seek user feedback?
+3. What is the reasoning behind this decision?
+
+Respond with: reasoning|decision
+
+Example: Step completed successfully, user query partially addressed|proceed
+Example: Permission error encountered, user authorization required|user_input"""
+
+            response = await self.llm.ainvoke(context)
+            response_text = response.content if hasattr(response, 'content') else str(response)
+
+            if "|" in response_text:
+                reasoning, decision = response_text.split("|", 1)
+                return {
+                    "reasoning": reasoning.strip(),
+                    "decision": decision.strip()
+                }
+            else:
+                raise ValueError(f"Invalid LLM response format. Expected 'reasoning|decision', got: {response_text}")
+
+        except Exception as e:
+            logger.error(f"Failed to analyze execution outcome: {e}")
+            raise RuntimeError(f"Execution outcome analysis failed: {e}") from e
+
     async def _generate_plan(self, state: MoveworksReasoningState) -> Dict[str, Any]:
-        """Generate execution plan using LLM planner."""
+        """
+        Generate execution plan using LLM planner.
+        Real Moveworks approach: Explore solution space of ALL available plugins.
+        """
+        # Get available plugins for context
+        available_plugins = await self._get_available_plugins_context()
+
         context = f"""User Query: {state['user_query']}
 User Context: {state['user_context']}
 Previous Feedback: {'; '.join(state['plan_feedback']) if state['plan_feedback'] else 'None'}
 
-Create a step-by-step plan to address the user's request.
+Available Plugins and Capabilities:
+{available_plugins}
+
+As a Moveworks reasoning engine, create a step-by-step plan to address the user's request.
+Explore the solution space of ALL available plugins and capabilities.
+
+Consider:
+1. Which plugins can help with this request?
+2. What sequence of actions would be most effective?
+3. Are there any dependencies between steps?
+4. What information might be needed from the user?
+
 Respond with: step1|step2|step3
 
-Example: Select relevant plugins|Execute plugin workflows|Combine responses"""
-        
+Example: Search knowledge base for relevant information|Execute workflow to create ticket|Summarize results for user"""
+
         try:
             response = await self.llm.ainvoke(context)
             response_text = response.content if hasattr(response, 'content') else str(response)
             steps = [step.strip() for step in response_text.split("|")]
-            
-            return {
+
+            plan_result = {
                 "id": f"plan_{state['plan_iterations']}",
                 "steps": steps,
-                "created_at": datetime.now().isoformat()
+                "created_at": datetime.now().isoformat(),
+                "available_plugins": len(available_plugins.split('\n')) if available_plugins else 0
             }
-            
+
+
+
+            return plan_result
+
         except Exception as e:
             logger.error(f"Error generating plan: {e}")
             raise RuntimeError(f"Plan generation failed: {e}") from e
     
     async def _evaluate_plan(self, state: MoveworksReasoningState, plan: Dict[str, Any]) -> Dict[str, Any]:
-        """Evaluate plan using LLM plan evaluator."""
+        """
+        Evaluate plan using LLM plan evaluator.
+        Real Moveworks approach: Assess if plan addresses user need with detailed criteria.
+        """
+        logger.info("🔍 ENHANCED EVALUATION: Starting sophisticated plan evaluation...")
+        print("🔍 ENHANCED EVALUATION: Starting sophisticated plan evaluation...")
+
         steps_text = "; ".join(plan.get("steps", []))
-        
-        context = f"""Evaluate this execution plan:
+
+        context = f"""As a Moveworks plan evaluator, assess this execution plan:
+
 User Query: {state['user_query']}
-Plan Steps: {steps_text}
+User Context: {state['user_context']}
+Proposed Plan Steps: {steps_text}
 
-Is this plan complete and executable? Respond with: approved|feedback
+Evaluation Criteria:
+1. Completeness: Does the plan address all aspects of the user's request?
+2. Feasibility: Are all steps executable with available plugins/capabilities?
+3. Efficiency: Is this the most direct path to solve the user's problem?
+4. Safety: Are there any high-risk operations that need user confirmation?
+5. Dependencies: Are step dependencies properly ordered?
 
-Example: approved|Plan addresses all user requirements
-Example: rejected|Missing step to validate user permissions"""
-        
+Previous Feedback: {'; '.join(state['plan_feedback']) if state['plan_feedback'] else 'None'}
+
+Respond with: approved|feedback OR rejected|specific_improvement_needed
+
+Examples:
+approved|Plan comprehensively addresses user request with proper sequencing
+rejected|Missing user permission validation before executing sensitive operations
+rejected|Step 2 depends on Step 3 output - reorder required"""
+
         try:
             response = await self.llm.ainvoke(context)
             response_text = response.content if hasattr(response, 'content') else str(response)
 
             if "|" not in response_text:
-                return {"approved": False, "feedback": "Invalid evaluation response"}
+                return {"approved": False, "feedback": "Invalid evaluation response format"}
 
             decision, feedback = response_text.split("|", 1)
             approved = decision.strip().lower() == "approved"
-            
-            return {
+
+            evaluation_result = {
                 "approved": approved,
-                "feedback": feedback.strip()
+                "feedback": feedback.strip(),
+                "evaluation_criteria": ["completeness", "feasibility", "efficiency", "safety", "dependencies"]
             }
-            
+
+
+
+            return evaluation_result
+
         except Exception as e:
             logger.error(f"Error evaluating plan: {e}")
             return {"approved": False, "feedback": f"Evaluation error: {e}"}
@@ -456,44 +573,21 @@ Example: rejected|Missing step to validate user permissions"""
             
         except Exception as e:
             logger.error(f"Error executing step '{step}': {e}")
-            return {
-                "step": step,
-                "success": False,
-                "error": str(e),
-                "plugins": []
-            }
+            raise RuntimeError(f"Step execution failed: {step} - {e}") from e
     
     async def _observe_and_adapt(self, state: MoveworksReasoningState, execution_result: Dict[str, Any]) -> Dict[str, Any]:
-        """Observe execution outcome and determine next action."""
+        """
+        Observe execution outcome and determine next action.
+        Real Moveworks approach: Sophisticated outcome observation and adaptive reasoning.
+        """
+        # Use agentic reasoning LLM to analyze the outcome
+        outcome_analysis = await self._analyze_execution_outcome(state, execution_result)
 
-        # Analyze execution result
+        # Analyze execution result - no fallback error handling
         if not execution_result["success"]:
             error_msg = execution_result.get("error", "Unknown error")
-
-            # Check if error requires user intervention
-            critical_errors = ["permission denied", "authentication failed", "user confirmation required"]
-            if any(critical in error_msg.lower() for critical in critical_errors):
-                return {
-                    "needs_user_input": True,
-                    "should_stop": False,
-                    "adaptation": f"User intervention needed: {error_msg}"
-                }
-
-            # Check if we should retry or continue
-            retry_errors = ["timeout", "network error", "temporary failure"]
-            if any(retry in error_msg.lower() for retry in retry_errors):
-                return {
-                    "needs_user_input": False,
-                    "should_stop": False,
-                    "adaptation": "Retry with exponential backoff"
-                }
-
-            # Fatal error - stop execution
-            return {
-                "needs_user_input": True,
-                "should_stop": True,
-                "adaptation": f"Fatal error encountered: {error_msg}"
-            }
+            # Let the system fail properly instead of trying to handle all error cases
+            raise RuntimeError(f"Execution failed: {error_msg}")
 
         # Success case - analyze if we need user confirmation
         plugins_used = execution_result.get("plugins", [])
@@ -559,24 +653,24 @@ Example: rejected|Missing step to validate user permissions"""
             return "finalize"
     
     async def _finalize_response_node(self, state: MoveworksReasoningState) -> MoveworksReasoningState:
-        """Generate final response from execution results."""
+        """Generate final response like real Moveworks - natural reasoning included in response."""
         successful_results = [r for r in state["execution_results"] if r["success"]]
-        
+
         if successful_results:
             responses = [r["response"] for r in successful_results if r.get("response")]
             if responses:
                 state["final_response"] = " ".join(responses)
             else:
-                state["final_response"] = f"I've completed {len(successful_results)} step(s) successfully."
-            
+                state["final_response"] = f"I've successfully completed {len(successful_results)} step(s) to address your request."
+
             # Collect user actions
             all_actions = []
             for result in successful_results:
                 all_actions.extend(result.get("actions", []))
             state["user_actions"] = all_actions
         else:
-            state["final_response"] = "I encountered issues processing your request. Please try again."
-        
+            state["final_response"] = "I encountered some challenges while processing your request. Let me know if you'd like me to try a different approach."
+
         # Add AI response to messages
         state["messages"].append(AIMessage(content=state["final_response"]))
 
@@ -598,16 +692,11 @@ Example: rejected|Missing step to validate user permissions"""
         """Check if user confirmation is needed based on execution results and context."""
         execution_results = state["execution_results"]
 
-        # Check for failed results
+        # Check for failed results - no fallback handling
         failed_results = [r for r in execution_results if not r["success"]]
         if failed_results:
             error_types = [r.get("error", "unknown") for r in failed_results]
-            return {
-                "required": True,
-                "message": f"I encountered {len(failed_results)} issue(s): {', '.join(error_types)}. How would you like me to proceed?",
-                "options": ["retry", "continue", "stop"],
-                "severity": "high"
-            }
+            raise RuntimeError(f"Execution failed with {len(failed_results)} error(s): {', '.join(error_types)}")
 
         # Check for high-impact actions
         all_actions = []

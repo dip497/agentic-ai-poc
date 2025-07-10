@@ -73,7 +73,7 @@ export default function ChatInterface({ client, sessionId, isConnected }: ChatIn
         // Add reasoning steps as system messages in the chat
         const stepName = step.step || step.state || 'reasoning'
         const action = step.action || 'Processing...'
-        addMessage('system', `🧠 ${stepName.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}: ${action}`)
+        addMessage('system', `🧠 ${stepName.replace(/_/g, ' ').replace(/\b\w/g, (l: string) => l.toUpperCase())}: ${action}`)
       }
 
       client.onConfirmationRequired = (confirmation) => {

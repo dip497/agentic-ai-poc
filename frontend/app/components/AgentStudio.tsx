@@ -107,7 +107,7 @@ const AgentStudio: React.FC = () => {
 
   const loadProcesses = async () => {
     try {
-      const response = await fetch('http://localhost:8000/api/agent-studio/processes');
+      const response = await fetch('http://localhost:8081/api/agent-studio/processes');
       const data = await response.json();
       setProcesses(data.processes || []);
     } catch (error) {
@@ -117,7 +117,7 @@ const AgentStudio: React.FC = () => {
 
   const loadConnectors = async () => {
     try {
-      const response = await fetch('http://localhost:8000/api/agent-studio/connectors');
+      const response = await fetch('http://localhost:8081/api/agent-studio/connectors');
       const data = await response.json();
       setConnectors(data.connectors || []);
       setLoading(false);
@@ -129,7 +129,7 @@ const AgentStudio: React.FC = () => {
 
   const createProcess = async () => {
     try {
-      const response = await fetch('http://localhost:8000/api/agent-studio/processes', {
+      const response = await fetch('http://localhost:8081/api/agent-studio/processes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -139,7 +139,7 @@ const AgentStudio: React.FC = () => {
           keywords: newProcess.keywords.split(',').map(k => k.trim())
         })
       });
-      
+
       if (response.ok) {
         setNewProcess({ name: '', description: '', triggers: '', keywords: '' });
         loadProcesses();
@@ -151,7 +151,7 @@ const AgentStudio: React.FC = () => {
 
   const createConnector = async () => {
     try {
-      const response = await fetch('http://localhost:8000/api/agent-studio/connectors', {
+      const response = await fetch('http://localhost:8081/api/agent-studio/connectors', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newConnector)
@@ -170,7 +170,7 @@ const AgentStudio: React.FC = () => {
     if (!editingProcess) return;
 
     try {
-      const response = await fetch(`http://localhost:8000/api/agent-studio/processes/${editingProcess.id}`, {
+      const response = await fetch(`http://localhost:8081/api/agent-studio/processes/${editingProcess.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(processData)
@@ -187,10 +187,10 @@ const AgentStudio: React.FC = () => {
 
   const testProcess = async (processId: string) => {
     if (!testInput.trim()) return;
-    
+
     setTesting(true);
     try {
-      const response = await fetch('http://localhost:8000/api/agent-studio/test', {
+      const response = await fetch('http://localhost:8081/api/agent-studio/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -198,7 +198,7 @@ const AgentStudio: React.FC = () => {
           test_input: testInput
         })
       });
-      
+
       const result = await response.json();
       if (response.ok) {
         loadTestResults(processId);
@@ -213,7 +213,7 @@ const AgentStudio: React.FC = () => {
 
   const loadTestResults = async (processId: string) => {
     try {
-      const response = await fetch(`http://localhost:8000/api/agent-studio/processes/${processId}/test-results`);
+      const response = await fetch(`http://localhost:8081/api/agent-studio/processes/${processId}/test-results`);
       const data = await response.json();
       setTestResults(data.test_results || []);
     } catch (error) {
@@ -243,6 +243,56 @@ const AgentStudio: React.FC = () => {
     setSelectedProcess(process);
     loadTestResults(process.id);
     setCurrentTab('testing');
+  };
+
+  const handleDeleteProcess = async (process: ConversationalProcess) => {
+    if (!confirm(`Are you sure you want to delete the process "${process.name}"? This action cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`http://localhost:8080/api/agent-studio/processes/${process.id}`, {
+        method: 'DELETE',
+      });
+
+      if (response.ok) {
+        // Reload the processes list to reflect the deletion
+        await loadProcesses();
+        // Show success message (you could add a toast notification here)
+        console.log(`Process "${process.name}" deleted successfully`);
+      } else {
+        const errorData = await response.json();
+        alert(`Failed to delete process: ${errorData.detail || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.error('Error deleting process:', error);
+      alert('Failed to delete process. Please try again.');
+    }
+  };
+
+  const handleDeleteConnector = async (connector: any) => {
+    if (!confirm(`Are you sure you want to delete the connector "${connector.name}"? This action cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`http://localhost:8080/api/agent-studio/connectors/${connector.id}`, {
+        method: 'DELETE',
+      });
+
+      if (response.ok) {
+        // Reload the connectors list to reflect the deletion
+        await loadConnectors();
+        // Show success message (you could add a toast notification here)
+        console.log(`Connector "${connector.name}" deleted successfully`);
+      } else {
+        const errorData = await response.json();
+        alert(`Failed to delete connector: ${errorData.detail || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.error('Error deleting connector:', error);
+      alert('Failed to delete connector. Please try again.');
+    }
   };
 
   const parseTriggers = (triggers: any): string[] => {
@@ -405,6 +455,15 @@ const AgentStudio: React.FC = () => {
                       <Play className="w-3 h-3 mr-1" />
                       Test
                     </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleDeleteProcess(process)}
+                      className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                    >
+                      <Trash2 className="w-3 h-3 mr-1" />
+                      Delete
+                    </Button>
                   </div>
                 </CardContent>
               </Card>
@@ -446,7 +505,7 @@ const AgentStudio: React.FC = () => {
                   </div>
                   <div>
                     <Label htmlFor="conn-type">Type</Label>
-                    <Select value={newConnector.type} onValueChange={(value) => setNewConnector({...newConnector, type: value})}>
+                    <Select value={newConnector.type} onValueChange={(value: string) => setNewConnector({...newConnector, type: value})}>
                       <SelectTrigger>
                         <SelectValue />
                       </SelectTrigger>
@@ -507,6 +566,15 @@ const AgentStudio: React.FC = () => {
                     <Button size="sm" variant="outline">
                       <TestTube className="w-3 h-3 mr-1" />
                       Test
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleDeleteConnector(connector)}
+                      className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                    >
+                      <Trash2 className="w-3 h-3 mr-1" />
+                      Delete
                     </Button>
                   </div>
                 </CardContent>

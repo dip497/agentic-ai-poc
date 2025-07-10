@@ -233,6 +233,48 @@ class HTTPConnector(BaseConnector):
                 error=str(e)
             )
 
+    async def make_request(self, method: str, endpoint: str, params: Dict[str, Any] = None, data: Dict[str, Any] = None) -> ActionResult:
+        """Make a direct HTTP request."""
+        try:
+            if not self.session:
+                await self.initialize()
+
+            # Build URL
+            url = f"{self.config.base_url.rstrip('/')}/{endpoint.lstrip('/')}"
+
+            # Make request
+            async with self.session.request(
+                method=method.upper(),
+                url=url,
+                params=params,
+                json=data if method.upper() != "GET" and data else None
+            ) as response:
+
+                if response.status < 400:
+                    try:
+                        response_data = await response.json()
+                    except:
+                        response_data = await response.text()
+
+                    return ActionResult(
+                        success=True,
+                        data=response_data,
+                        status_code=response.status
+                    )
+                else:
+                    error_text = await response.text()
+                    return ActionResult(
+                        success=False,
+                        error=f"HTTP {response.status}: {error_text}",
+                        status_code=response.status
+                    )
+
+        except Exception as e:
+            return ActionResult(
+                success=False,
+                error=str(e)
+            )
+
 
 class SystemConnector(BaseConnector):
     """System connector for integrating with enterprise systems."""
@@ -255,39 +297,120 @@ class SystemConnector(BaseConnector):
         )
 
 
+class ConnectorFactory:
+    """Factory for creating connectors from database configuration."""
+
+    @staticmethod
+    async def create_connector_from_config(connector_config: Dict[str, Any]) -> BaseConnector:
+        """Create a connector instance from database configuration."""
+        config = ConnectorConfig(
+            name=connector_config['name'],
+            description=connector_config['description'],
+            base_url=connector_config['base_url'],
+            auth_type=AuthType(connector_config['auth_type']),
+            auth_config=connector_config['auth_config'],
+            headers=connector_config.get('headers', {}),
+            timeout=connector_config.get('timeout', 30),
+            retry_count=connector_config.get('retry_count', 3)
+        )
+
+        # Create appropriate connector type based on configuration
+        connector_type = connector_config.get('type', 'http')
+
+        if connector_type == 'http':
+            connector = HTTPConnector(config)
+
+            # Register available actions from configuration
+            available_actions = connector_config.get('available_actions', [])
+            for action in available_actions:
+                if isinstance(action, dict) and 'name' in action:
+                    action_config = {
+                        'endpoint': action.get('endpoint', ''),
+                        'method': action.get('method', 'GET'),
+                        'params': action.get('params', {}),
+                        'data': action.get('data', {})
+                    }
+                    connector.register_action(action['name'], action_config)
+
+            return connector
+
+        elif connector_type == 'system':
+            return SystemConnector(config)
+
+        else:
+            # Default to HTTP connector
+            return HTTPConnector(config)
+
+
 class ConnectorManager:
-    """Manages all connectors in the system."""
-    
+    """Manages all connectors in the system - now database-driven."""
+
     def __init__(self):
         self.connectors: Dict[str, BaseConnector] = {}
-    
+        self.connector_configs: Dict[str, Dict[str, Any]] = {}
+
+    async def load_connectors_from_database(self):
+        """Load all connectors from database configuration."""
+        try:
+            from src.agent_studio.database import agent_studio_db
+
+            # Ensure database is initialized
+            if not hasattr(agent_studio_db, 'pool') or agent_studio_db.pool is None:
+                await agent_studio_db.initialize()
+
+            # Load connector configurations
+            connector_configs = await agent_studio_db.list_connectors()
+
+            for config in connector_configs:
+                try:
+                    connector = await ConnectorFactory.create_connector_from_config(config)
+                    await connector.initialize()
+
+                    self.connectors[config['name']] = connector
+                    self.connector_configs[config['name']] = config
+
+                    print(f"Loaded connector: {config['name']} -> {config['base_url']}")
+
+                except Exception as e:
+                    print(f"Failed to load connector {config['name']}: {e}")
+                    continue
+
+            print(f"Successfully loaded {len(self.connectors)} connectors from database")
+
+        except Exception as e:
+            print(f"Failed to load connectors from database: {e}")
+
     def register_connector(self, connector: BaseConnector):
-        """Register a connector."""
+        """Register a connector manually."""
         self.connectors[connector.config.name] = connector
-    
+
     def get_connector(self, name: str) -> Optional[BaseConnector]:
         """Get a connector by name."""
         return self.connectors.get(name)
-    
+
     async def execute_action(self, connector_name: str, action_name: str, input_args: Dict[str, Any]) -> ActionResult:
         """Execute an action using a specific connector."""
         connector = self.get_connector(connector_name)
         if not connector:
             return ActionResult(
                 success=False,
-                error=f"Connector '{connector_name}' not found"
+                error=f"Connector '{connector_name}' not found. Available: {list(self.connectors.keys())}"
             )
-        
+
         return await connector.execute_action(action_name, input_args)
-    
+
     async def test_all_connections(self) -> Dict[str, ActionResult]:
         """Test all connector connections."""
         results = {}
         for name, connector in self.connectors.items():
             results[name] = await connector.test_connection()
         return results
-    
+
     async def close_all(self):
         """Close all connectors."""
         for connector in self.connectors.values():
             await connector.close()
+
+
+# Global connector manager instance
+connector_manager = ConnectorManager()

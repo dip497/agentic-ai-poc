@@ -101,6 +101,10 @@ def create_agent_studio_router() -> APIRouter:
     async def list_processes():
         """List all conversational processes."""
         try:
+            # Ensure database is initialized
+            if not agent_studio_db.pool:
+                await agent_studio_db.initialize()
+
             processes = await agent_studio_db.list_processes()
             return JSONResponse(content={
                 "processes": [
@@ -265,12 +269,170 @@ def create_agent_studio_router() -> APIRouter:
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
     
+    # ========== SLOTS ==========
+
+    @router.get("/slots")
+    async def list_slots():
+        """List all slot definitions."""
+        try:
+            slots = await agent_studio_db.list_slots()
+            return JSONResponse(content={
+                "slots": [
+                    {
+                        "id": str(s["id"]),
+                        "name": s["name"],
+                        "data_type": s["data_type"],
+                        "description": s["description"],
+                        "inference_policy": s["inference_policy"],
+                        "validation_policy": s.get("validation_policy"),
+                        "validation_description": s.get("validation_description"),
+                        "resolver_strategy": s["resolver_strategy"],
+                        "created_at": s["created_at"].isoformat(),
+                        "updated_at": s["updated_at"].isoformat()
+                    } for s in slots
+                ],
+                "total": len(slots)
+            })
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @router.post("/slots")
+    async def create_slot(request: dict):
+        """Create a new slot definition."""
+        try:
+            slot_id = await agent_studio_db.create_slot(request)
+            return JSONResponse(content={
+                "id": slot_id,
+                "message": "Slot created successfully"
+            }, status_code=201)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    # ========== ACTIONS ==========
+
+    @router.get("/actions")
+    async def list_actions():
+        """List all action definitions with Moveworks-style configuration."""
+        try:
+            actions = await agent_studio_db.list_actions()
+            return JSONResponse(content={
+                "actions": [
+                    {
+                        "id": str(a["id"]),
+                        "name": a["name"],
+                        "type": a["type"],
+                        "description": a["description"],
+                        "config": a["config"],
+                        "input_schema": a.get("input_schema"),
+                        "output_schema": a.get("output_schema"),
+                        "connector_id": a.get("connector_id"),
+                        "created_at": a["created_at"].isoformat(),
+                        "updated_at": a["updated_at"].isoformat()
+                    } for a in actions
+                ],
+                "total": len(actions)
+            })
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @router.post("/actions")
+    async def create_action(request: dict):
+        """Create a new action definition."""
+        try:
+            action_id = await agent_studio_db.create_action(request)
+            return JSONResponse(content={
+                "id": action_id,
+                "message": "Action created successfully"
+            }, status_code=201)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    # ========== ACTIVITIES ==========
+
+    @router.get("/activities")
+    async def list_activities():
+        """List all activity definitions."""
+        try:
+            activities = await agent_studio_db.list_activities()
+            return JSONResponse(content={
+                "activities": [
+                    {
+                        "id": str(a["id"]),
+                        "name": a["name"],
+                        "type": a["type"],
+                        "config": a["config"],
+                        "input_mapping": a.get("input_mapping"),
+                        "output_mapping": a.get("output_mapping"),
+                        "confirmation_policy": a.get("confirmation_policy"),
+                        "required_slots": a.get("required_slots"),
+                        "created_at": a["created_at"].isoformat(),
+                        "updated_at": a["updated_at"].isoformat()
+                    } for a in activities
+                ],
+                "total": len(activities)
+            })
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @router.post("/activities")
+    async def create_activity(request: dict):
+        """Create a new activity definition."""
+        try:
+            activity_id = await agent_studio_db.create_activity(request)
+            return JSONResponse(content={
+                "id": activity_id,
+                "message": "Activity created successfully"
+            }, status_code=201)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    # ========== DEPLOYMENTS ==========
+
+    @router.get("/deployments")
+    async def list_deployments():
+        """List all deployments."""
+        try:
+            deployments = await agent_studio_db.list_deployments()
+            return JSONResponse(content={
+                "deployments": [
+                    {
+                        "id": str(d["id"]),
+                        "process_id": str(d["process_id"]),
+                        "environment": d["environment"],
+                        "enabled": d["enabled"],
+                        "user_groups": d["user_groups"],
+                        "rollback_plan": d.get("rollback_plan"),
+                        "deployed_at": d["deployed_at"].isoformat(),
+                        "deployed_by": d["deployed_by"]
+                    } for d in deployments
+                ],
+                "total": len(deployments)
+            })
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @router.post("/deploy")
+    async def deploy_process(request: dict):
+        """Deploy a process to an environment."""
+        try:
+            deployment_id = await agent_studio_db.create_deployment(request)
+            return JSONResponse(content={
+                "id": deployment_id,
+                "message": "Process deployed successfully"
+            }, status_code=201)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
     # ========== CONNECTORS ==========
     
     @router.get("/connectors")
     async def list_connectors():
         """List all connectors."""
         try:
+            # Ensure database is initialized
+            if not agent_studio_db.pool:
+                await agent_studio_db.initialize()
+
             connectors = await agent_studio_db.list_connectors()
             return JSONResponse(content={
                 "connectors": [
